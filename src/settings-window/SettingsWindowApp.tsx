@@ -50,6 +50,8 @@ export function SettingsWindowApp() {
           onWidgetProviderIdsChange={s.handleWidgetProviderIdsChange}
           widgetMetric={s.widgetMetric}
           onWidgetMetricChange={s.handleWidgetMetricChange}
+          widgetZoom={s.widgetZoom}
+          onWidgetZoomChange={s.handleWidgetZoomChange}
           activeTab={activeTab}
           onActiveTabChange={setActiveTab}
         />

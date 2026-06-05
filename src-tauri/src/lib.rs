@@ -342,6 +342,11 @@ fn save_widget_position(app_handle: tauri::AppHandle, x: i32, y: i32) {
 }
 
 #[tauri::command]
+fn move_widget_to(app_handle: tauri::AppHandle, x: i32, y: i32) {
+    widget::move_widget_to(&app_handle, x, y);
+}
+
+#[tauri::command]
 fn bring_widget_on_screen(app_handle: tauri::AppHandle) {
     widget::bring_widget_on_screen(&app_handle);
 }
@@ -655,6 +660,7 @@ pub fn run() {
             toggle_widget,
             set_widget_visible,
             save_widget_position,
+            move_widget_to,
             bring_widget_on_screen,
             open_devtools,
             open_settings_window,

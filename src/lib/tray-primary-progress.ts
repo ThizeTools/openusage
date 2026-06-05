@@ -12,6 +12,7 @@ export type TrayPrimaryBar = {
   id: string
   label?: string
   fraction?: number
+  used?: number
   usedFraction?: number
   expectedFraction?: number
 }
@@ -100,6 +101,7 @@ export function getTrayPrimaryBars(args: {
           id,
           label: line.label,
           fraction: usedFraction,
+          used: line.used,
           usedFraction,
           expectedFraction,
         })

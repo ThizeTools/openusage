@@ -16,7 +16,9 @@ import {
   loadWidgetLayout,
   loadWidgetMetric,
   loadWidgetProviderIds,
+  loadWidgetZoom,
   saveWidgetLayout,
+  saveWidgetZoom,
   normalizePluginSettings,
   type PluginSettings,
   type ThemeMode,
@@ -25,6 +27,7 @@ import {
   type WidgetProviderIds,
 } from "@/lib/settings"
 import { buildWidgetRows, type WidgetRow } from "@/lib/widget-rows"
+import { clampWidgetZoom, WIDGET_ZOOM_DEFAULT } from "@/lib/widget-zoom"
 
 const SETTINGS_STORE_PATH = "settings.json"
 const POSITION_SAVE_DEBOUNCE_MS = 400
@@ -34,6 +37,8 @@ type ProbeResultEvent = { batchId: string; output: PluginOutput }
 export function useWidgetData(): {
   rows: WidgetRow[]
   layout: WidgetLayout
+  zoom: number
+  setWidgetZoom: (zoom: number) => void
   ready: boolean
   toggleLayout: () => void
 } {
@@ -44,6 +49,7 @@ export function useWidgetData(): {
   const [layout, setLayout] = useState<WidgetLayout>(DEFAULT_WIDGET_LAYOUT)
   const [widgetProviderIds, setWidgetProviderIds] = useState<WidgetProviderIds>(null)
   const [widgetMetric, setWidgetMetric] = useState<WidgetMetric>(null)
+  const [zoom, setZoom] = useState(WIDGET_ZOOM_DEFAULT)
   const [themeMode, setThemeMode] = useState<ThemeMode>(DEFAULT_THEME_MODE)
   const [ready, setReady] = useState(false)
 
@@ -90,11 +96,12 @@ export function useWidgetData(): {
         if (cancelled) return
         setPluginsMeta(meta)
 
-        const [stored, widgetLayout, providers, metric, theme] = await Promise.all([
+        const [stored, widgetLayout, providers, metric, widgetZoom, theme] = await Promise.all([
           loadPluginSettings(),
           loadWidgetLayout(),
           loadWidgetProviderIds(),
           loadWidgetMetric(),
+          loadWidgetZoom(),
           loadThemeMode(),
         ])
         if (cancelled) return
@@ -104,6 +111,7 @@ export function useWidgetData(): {
         setLayout(widgetLayout)
         setWidgetProviderIds(providers)
         setWidgetMetric(metric)
+        setZoom(widgetZoom)
         setThemeMode(theme)
         setReady(true)
 
@@ -138,6 +146,7 @@ export function useWidgetData(): {
       await subscribe<WidgetLayout>("widgetLayout", setLayout)
       await subscribe<WidgetProviderIds>("widgetProviderIds", setWidgetProviderIds)
       await subscribe<WidgetMetric>("widgetMetric", (value) => setWidgetMetric(value ?? null))
+      await subscribe<number>("widgetZoom", (value) => setZoom(clampWidgetZoom(value)))
       await subscribe<ThemeMode>("themeMode", setThemeMode)
       await subscribe<PluginSettings>("plugins", (value) => {
         setPluginsMeta((meta) => {
@@ -187,6 +196,14 @@ export function useWidgetData(): {
     }
   }, [])
 
+  const setWidgetZoom = useCallback((next: number) => {
+    const clamped = clampWidgetZoom(next)
+    setZoom(clamped)
+    void saveWidgetZoom(clamped).catch((error) => {
+      console.error("Failed to save widget zoom:", error)
+    })
+  }, [])
+
   const toggleLayout = useCallback(() => {
     setLayout((prev) => {
       const next: WidgetLayout = prev === "horizontal" ? "vertical" : "horizontal"
@@ -207,5 +224,5 @@ export function useWidgetData(): {
     nowMs,
   })
 
-  return { rows, layout, ready, toggleLayout }
+  return { rows, layout, zoom, setWidgetZoom, ready, toggleLayout }
 }

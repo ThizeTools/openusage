@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 import { buildWidgetRows } from "@/lib/widget-rows"
 import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
-import type { PluginSettings } from "@/lib/settings"
+import {
+  WIDGET_METRIC_ALL,
+  WIDGET_METRIC_MOST_USED,
+  WIDGET_METRIC_SUGESTAO,
+  type PluginSettings,
+} from "@/lib/settings"
 
 function meta(id: string, labels: string[], name = id): PluginMeta {
   return {
@@ -170,6 +175,158 @@ describe("buildWidgetRows", () => {
       nowMs,
     })
     expect(rows[0].limitedUntilMs).toBe(Date.parse(weeklyResetsAt))
+  })
+
+  it("most-used mode shows the provider's most constrained metric", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {
+        claude: state("claude", [
+          { label: "Weekly", used: 25, limit: 100 },
+          { label: "Session", used: 80, limit: 100 },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_MOST_USED,
+    })
+    expect(rows[0].metrics).toHaveLength(1)
+    expect(rows[0].metrics![0].label).toBe("Session")
+    expect(rows[0].metrics![0].fraction).toBeCloseTo(0.8, 4)
+    expect(rows[0].fraction).toBeCloseTo(0.8, 4)
+  })
+
+  it("all mode shows every metric of the provider in order", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {
+        claude: state("claude", [
+          { label: "Weekly", used: 25, limit: 100 },
+          { label: "Session", used: 80, limit: 100 },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_ALL,
+    })
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Weekly", "Session"])
+    expect(rows[0].metrics!.map((m) => m.fraction)).toEqual([0.25, 0.8])
+  })
+
+  it("multi modes keep providers without data as a dash row", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Weekly"])],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {},
+      widgetMetric: WIDGET_METRIC_ALL,
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].fraction).toBeNull()
+    expect(rows[0].metrics).toEqual([])
+  })
+
+  it("single metric pick is unaffected by the pseudo modes", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {
+        claude: state("claude", [
+          { label: "Weekly", used: 25, limit: 100 },
+          { label: "Session", used: 80, limit: 100 },
+        ]),
+      },
+      widgetMetric: "Session",
+    })
+    expect(rows[0].metrics).toBeUndefined()
+    expect(rows[0].fraction).toBeCloseTo(0.8, 4)
+  })
+
+  it("sugestao mode shows suggested metrics per known provider", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [
+        meta("codex", ["Session", "Weekly", "Spark", "Spark Weekly"], "Codex"),
+        meta("claude", ["Session", "Weekly", "Extra"], "Claude"),
+        meta("cursor", ["Total usage", "Requests"], "Cursor"),
+      ],
+      pluginSettings: settings(["codex", "claude", "cursor"]),
+      pluginStates: {
+        codex: state("codex", [
+          { label: "Session", used: 25, limit: 100 },
+          { label: "Weekly", used: 50, limit: 100 },
+          { label: "Spark", used: 10, limit: 100 },
+          { label: "Spark Weekly", used: 20, limit: 100 },
+        ]),
+        claude: state("claude", [
+          { label: "Session", used: 30, limit: 100 },
+          { label: "Weekly", used: 40, limit: 100 },
+          { label: "Extra", used: 90, limit: 100 },
+        ]),
+        cursor: state("cursor", [
+          { label: "Total usage", used: 60, limit: 100 },
+          { label: "Requests", used: 70, limit: 100 },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_SUGESTAO,
+    })
+
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly", "Spark", "Spark Weekly"])
+    expect(rows[0].metrics!.every((m) => m.hidePercentSign)).toBe(true)
+    expect(rows[1].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly"])
+    expect(rows[2].metrics!.map((m) => m.label)).toEqual(["Total usage"])
+  })
+
+  it("sugestao mode only shows Spark metrics when Codex data has usage", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("codex", ["Session", "Weekly", "Spark", "Spark Weekly"], "Codex")],
+      pluginSettings: settings(["codex"]),
+      pluginStates: {
+        codex: state("codex", [
+          { label: "Session", used: 25, limit: 100 },
+          { label: "Weekly", used: 50, limit: 100 },
+          { label: "Spark", used: 0, limit: 100 },
+          { label: "Spark Weekly", used: 0, limit: 100 },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_SUGESTAO,
+    })
+
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly"])
+  })
+
+  it("sugestao mode does not invent metrics for unknown providers", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("other", ["Session", "Weekly"], "Other")],
+      pluginSettings: settings(["other"]),
+      pluginStates: {
+        other: state("other", [
+          { label: "Session", used: 25, limit: 100 },
+          { label: "Weekly", used: 50, limit: 100 },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_SUGESTAO,
+    })
+
+    expect(rows[0].metrics).toEqual([])
+    expect(rows[0].fraction).toBeNull()
+  })
+
+  it("passes expected fraction through rows and metrics", () => {
+    const periodMs = 7 * 24 * 60 * 60 * 1000
+    const nowMs = 1_000_000_000_000
+    const resetsAt = new Date(nowMs + periodMs / 2).toISOString()
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {
+        claude: state("claude", [
+          { label: "Weekly", used: 25, limit: 100, resetsAt, periodDurationMs: periodMs },
+          { label: "Session", used: 80, limit: 100, resetsAt, periodDurationMs: periodMs },
+        ]),
+      },
+      widgetMetric: WIDGET_METRIC_ALL,
+      nowMs,
+    })
+
+    expect(rows[0].expectedFraction).toBeCloseTo(0.5, 4)
+    expect(rows[0].metrics!.map((m) => m.expectedFraction)).toEqual([0.5, 0.5])
   })
 
   it("ignores reached limits whose reset is already in the past", () => {

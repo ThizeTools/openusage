@@ -36,43 +36,108 @@ fn widget_size(window: &tauri::WebviewWindow) -> (i32, i32) {
 }
 
 /// Minimum overlap (px) the widget must share with a monitor to count as
-/// on-screen — enough surface to grab and drag it back.
+/// on-screen — enough surface to grab and drag it back. Capped by the widget's
+/// own extent: a 24px-tall horizontal strip can never overlap 32px vertically.
 const MIN_VISIBLE_PX: i32 = 32;
 
-/// True if the widget at `pos` overlaps any available monitor's full bounds by
-/// at least [`MIN_VISIBLE_PX`] on both axes. Uses the full monitor (not the
-/// work area) so the widget may sit on top of the taskbar.
-fn position_is_on_screen(window: &tauri::WebviewWindow, pos: PhysicalPosition<i32>) -> bool {
-    let (w, h) = widget_size(window);
-    let Ok(monitors) = window.available_monitors() else {
-        return true; // can't tell — assume fine, don't move it
-    };
-    monitors.iter().any(|monitor| {
-        let (mx, my) = (monitor.position().x, monitor.position().y);
-        let (mw, mh) = (monitor.size().width as i32, monitor.size().height as i32);
-        let overlap_x = (pos.x + w).min(mx + mw) - pos.x.max(mx);
-        let overlap_y = (pos.y + h).min(my + mh) - pos.y.max(my);
-        overlap_x >= MIN_VISIBLE_PX && overlap_y >= MIN_VISIBLE_PX
+/// Monitor full bounds as `(x, y, w, h)` — taskbar included.
+type MonitorRect = (i32, i32, i32, i32);
+
+fn monitor_rects(window: &tauri::WebviewWindow) -> Vec<MonitorRect> {
+    window
+        .available_monitors()
+        .map(|monitors| {
+            monitors
+                .iter()
+                .map(|m| {
+                    (
+                        m.position().x,
+                        m.position().y,
+                        m.size().width as i32,
+                        m.size().height as i32,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn overlap_axis(pos: i32, extent: i32, monitor_pos: i32, monitor_extent: i32) -> i32 {
+    (pos + extent).min(monitor_pos + monitor_extent) - pos.max(monitor_pos)
+}
+
+/// True when the rect overlaps any monitor by at least [`MIN_VISIBLE_PX`]
+/// (capped by the rect's own size) on both axes.
+fn rect_is_on_screen(pos: (i32, i32), size: (i32, i32), monitors: &[MonitorRect]) -> bool {
+    let need_x = MIN_VISIBLE_PX.min(size.0.max(1));
+    let need_y = MIN_VISIBLE_PX.min(size.1.max(1));
+    monitors.iter().any(|&(mx, my, mw, mh)| {
+        overlap_axis(pos.0, size.0, mx, mw) >= need_x && overlap_axis(pos.1, size.1, my, mh) >= need_y
     })
 }
 
-/// Clamps `pos` so the whole widget fits inside the primary monitor's full
-/// bounds (taskbar included, so it may rest over it). Used to recover an
-/// off-screen widget.
+/// Clamps the rect fully inside the monitor it overlaps the most (nearest
+/// monitor when fully off-screen), using full bounds so the widget may rest
+/// over the taskbar.
+fn clamp_rect_to_monitors(
+    pos: (i32, i32),
+    size: (i32, i32),
+    monitors: &[MonitorRect],
+) -> Option<(i32, i32)> {
+    let (mx, my, mw, mh) = *monitors.iter().max_by_key(|&&(mx, my, mw, mh)| {
+        let ox = overlap_axis(pos.0, size.0, mx, mw).max(0) as i64;
+        let oy = overlap_axis(pos.1, size.1, my, mh).max(0) as i64;
+        let cx = pos.0 as i64 + size.0 as i64 / 2 - (mx as i64 + mw as i64 / 2);
+        let cy = pos.1 as i64 + size.1 as i64 / 2 - (my as i64 + mh as i64 / 2);
+        // Most overlap wins; among zero-overlap monitors, the nearest center.
+        (ox * oy, -(cx * cx + cy * cy))
+    })?;
+    Some((
+        pos.0.clamp(mx, (mx + mw - size.0).max(mx)),
+        pos.1.clamp(my, (my + mh - size.1).max(my)),
+    ))
+}
+
+/// True if the widget at `pos` overlaps any available monitor's full bounds —
+/// full monitor (not the work area) so the widget may sit on top of the taskbar.
+fn position_is_on_screen(window: &tauri::WebviewWindow, pos: PhysicalPosition<i32>) -> bool {
+    let monitors = monitor_rects(window);
+    if monitors.is_empty() {
+        return true; // can't tell — assume fine, don't move it
+    }
+    rect_is_on_screen((pos.x, pos.y), widget_size(window), &monitors)
+}
+
+/// Clamps `pos` so the whole widget fits inside a monitor's full bounds
+/// (taskbar included, so it may rest over it). Used to recover an off-screen
+/// widget.
 fn clamp_to_monitor(
     window: &tauri::WebviewWindow,
     pos: PhysicalPosition<i32>,
 ) -> Option<PhysicalPosition<i32>> {
-    let monitor = window.primary_monitor().ok().flatten()?;
-    let (w, h) = widget_size(window);
-    let min_x = monitor.position().x;
-    let min_y = monitor.position().y;
-    let max_x = min_x + monitor.size().width as i32 - w;
-    let max_y = min_y + monitor.size().height as i32 - h;
-    Some(PhysicalPosition {
-        x: pos.x.clamp(min_x, max_x.max(min_x)),
-        y: pos.y.clamp(min_y, max_y.max(min_y)),
-    })
+    let (x, y) = clamp_rect_to_monitors(
+        (pos.x, pos.y),
+        widget_size(window),
+        &monitor_rects(window),
+    )?;
+    Some(PhysicalPosition { x, y })
+}
+
+/// Moves the widget to `(x, y)`, clamped fully inside the nearest monitor's
+/// full bounds. The widget is dragged from JS (pointer capture + this command)
+/// instead of a native drag region: Windows' native move loop clamps a tiny
+/// frameless window to the work area on drop, which forbade resting the widget
+/// over the taskbar.
+pub fn move_widget_to(app_handle: &AppHandle, x: i32, y: i32) {
+    let Some(window) = app_handle.get_webview_window(WIDGET_LABEL) else {
+        return;
+    };
+    let target = clamp_rect_to_monitors((x, y), widget_size(&window), &monitor_rects(&window))
+        .map(|(x, y)| PhysicalPosition { x, y })
+        .unwrap_or(PhysicalPosition { x, y });
+    if let Err(error) = window.set_position(Position::Physical(target)) {
+        log::warn!("Failed to move widget: {}", error);
+    }
 }
 
 /// Default position: top-right corner of the primary monitor's work area.
@@ -92,13 +157,11 @@ pub fn restore_widget_position(app_handle: &AppHandle) {
     let Some(window) = app_handle.get_webview_window(WIDGET_LABEL) else {
         return;
     };
-    let mut position = stored_position(app_handle).or_else(|| default_position(&window));
-    // Auto-recover an off-screen position (e.g. after a monitor was unplugged).
-    if let Some(pos) = position {
-        if !position_is_on_screen(&window, pos) {
-            position = clamp_to_monitor(&window, pos).or_else(|| default_position(&window));
-        }
-    }
+    // Stored positions are applied as-is first. At startup the window still has
+    // the config size (260x120), not the auto-fit content size (~350x24), so
+    // clamping here would evict a valid taskbar-parked strip. The frontend calls
+    // `bring_widget_on_screen` after auto-fit, when the real size is known.
+    let position = stored_position(app_handle).or_else(|| default_position(&window));
     if let Some(position) = position {
         if let Err(error) = window.set_position(Position::Physical(position)) {
             log::warn!("Failed to position widget: {}", error);
@@ -292,4 +355,71 @@ pub fn toggle_widget(app_handle: &AppHandle) -> bool {
         .unwrap_or(false);
     set_widget_visible(app_handle, !visible);
     !visible
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_rect_to_monitors, rect_is_on_screen, MonitorRect};
+
+    // 3440x1440 primary; taskbar occupies y 1392..1440 (not part of these rects).
+    const PRIMARY: MonitorRect = (0, 0, 3440, 1440);
+
+    #[test]
+    fn thin_strip_at_bottom_edge_is_on_screen() {
+        // 24px-tall widget resting over the taskbar: overlap_y can never reach
+        // 32, the cap by the widget's own height must kick in.
+        assert!(rect_is_on_screen((56, 1416), (349, 24), &[PRIMARY]));
+    }
+
+    #[test]
+    fn rect_far_below_screen_is_off_screen() {
+        assert!(!rect_is_on_screen((56, 1431), (349, 24), &[PRIMARY])); // 9px visible
+        assert!(!rect_is_on_screen((56, 2000), (349, 24), &[PRIMARY]));
+    }
+
+    #[test]
+    fn clamp_allows_taskbar_but_not_past_screen_bottom() {
+        // Drop inside the taskbar band stays put…
+        assert_eq!(
+            clamp_rect_to_monitors((56, 1400), (349, 24), &[PRIMARY]),
+            Some((56, 1400))
+        );
+        // …but past the bottom edge clamps to fully visible (1440 - 24).
+        assert_eq!(
+            clamp_rect_to_monitors((56, 1500), (349, 24), &[PRIMARY]),
+            Some((56, 1416))
+        );
+    }
+
+    #[test]
+    fn clamp_pulls_back_horizontal_overflow() {
+        assert_eq!(
+            clamp_rect_to_monitors((3300, 100), (349, 24), &[PRIMARY]),
+            Some((3091, 100))
+        );
+        assert_eq!(
+            clamp_rect_to_monitors((-200, 100), (349, 24), &[PRIMARY]),
+            Some((0, 100))
+        );
+    }
+
+    #[test]
+    fn clamp_prefers_monitor_with_most_overlap() {
+        let secondary: MonitorRect = (3440, 0, 1920, 1080);
+        // Mostly on the secondary monitor → clamped within it.
+        assert_eq!(
+            clamp_rect_to_monitors((5300, 500), (349, 24), &[PRIMARY, secondary]),
+            Some((5011, 500))
+        );
+        // Mostly on the primary → clamped within it.
+        assert_eq!(
+            clamp_rect_to_monitors((100, 1500), (349, 24), &[PRIMARY, secondary]),
+            Some((100, 1416))
+        );
+    }
+
+    #[test]
+    fn clamp_with_no_monitors_returns_none() {
+        assert_eq!(clamp_rect_to_monitors((0, 0), (349, 24), &[]), None);
+    }
 }

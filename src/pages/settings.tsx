@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Minus, Plus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { GlobalShortcutSection } from "@/components/global-shortcut-section";
@@ -26,6 +26,9 @@ import {
   RESET_TIMER_DISPLAY_OPTIONS,
   THEME_OPTIONS,
   WIDGET_LAYOUT_OPTIONS,
+  WIDGET_METRIC_ALL,
+  WIDGET_METRIC_MOST_USED,
+  WIDGET_METRIC_SUGESTAO,
   type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type ResetTimerDisplayMode,
@@ -34,6 +37,13 @@ import {
   type WidgetMetric,
   type WidgetProviderIds,
 } from "@/lib/settings";
+import {
+  adjustWidgetZoom,
+  formatWidgetZoomPercent,
+  WIDGET_ZOOM_MAX,
+  WIDGET_ZOOM_MIN,
+  WIDGET_ZOOM_SETTINGS_STEP,
+} from "@/lib/widget-zoom";
 import { getTimeFormatter } from "@/lib/reset-tooltip";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +140,8 @@ interface SettingsPageProps {
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void;
   widgetMetric: WidgetMetric;
   onWidgetMetricChange: (value: WidgetMetric) => void;
+  widgetZoom: number;
+  onWidgetZoomChange: (value: number) => void;
   availableMetrics: string[];
   activeTab?: string;
   onActiveTabChange?: (tab: string) => void;
@@ -159,6 +171,8 @@ export function SettingsPage({
   onWidgetProviderIdsChange,
   widgetMetric,
   onWidgetMetricChange,
+  widgetZoom,
+  onWidgetZoomChange,
   availableMetrics,
   activeTab,
   onActiveTabChange,
@@ -380,10 +394,45 @@ export function SettingsPage({
             })}
           </div>
         </div>
+        <p className="text-sm text-muted-foreground mt-3 mb-1">Zoom</p>
+        <div className="bg-muted/50 rounded-lg p-1 flex items-center justify-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Decrease widget zoom"
+            disabled={widgetZoom <= WIDGET_ZOOM_MIN}
+            onClick={() => onWidgetZoomChange(adjustWidgetZoom(widgetZoom, -WIDGET_ZOOM_SETTINGS_STEP))}
+          >
+            <Minus className="size-4" />
+          </Button>
+          <span
+            className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums"
+            aria-live="polite"
+            aria-label="Widget zoom"
+          >
+            {formatWidgetZoomPercent(widgetZoom)}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Increase widget zoom"
+            disabled={widgetZoom >= WIDGET_ZOOM_MAX}
+            onClick={() => onWidgetZoomChange(adjustWidgetZoom(widgetZoom, WIDGET_ZOOM_SETTINGS_STEP))}
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
         <p className="text-sm text-muted-foreground mt-3 mb-1">Metric</p>
         <div className="bg-muted/50 rounded-lg p-1">
           <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Widget metric">
-            {[{ value: null as WidgetMetric, label: "Auto" }, ...availableMetrics.map((m) => ({ value: m as WidgetMetric, label: m }))].map((option) => {
+            {[
+              { value: WIDGET_METRIC_SUGESTAO as WidgetMetric, label: "Auto" },
+              { value: WIDGET_METRIC_MOST_USED as WidgetMetric, label: "Most used" },
+              { value: WIDGET_METRIC_ALL as WidgetMetric, label: "All" },
+              ...availableMetrics.map((m) => ({ value: m as WidgetMetric, label: m })),
+            ].map((option) => {
               const isActive = (widgetMetric ?? null) === option.value;
               return (
                 <Button

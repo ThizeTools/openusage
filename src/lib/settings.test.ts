@@ -10,6 +10,7 @@ import {
   DEFAULT_WIDGET_LAYOUT,
   DEFAULT_WIDGET_PROVIDER_IDS,
   DEFAULT_WIDGET_VISIBLE,
+  DEFAULT_WIDGET_ZOOM,
   arePluginSettingsEqual,
   getEnabledPluginIds,
   loadAutoUpdateInterval,
@@ -34,6 +35,8 @@ import {
   saveStartOnLogin,
   saveThemeMode,
   saveWidgetLayout,
+  loadWidgetZoom,
+  saveWidgetZoom,
   saveWidgetPosition,
   saveWidgetProviderIds,
   saveWidgetVisible,
@@ -434,5 +437,19 @@ describe("settings", () => {
   it("falls back to default for invalid widget provider ids", async () => {
     storeState.set("widgetProviderIds", [1, "codex"])
     await expect(loadWidgetProviderIds()).resolves.toBe(DEFAULT_WIDGET_PROVIDER_IDS)
+  })
+
+  it("loads default widget zoom when missing", async () => {
+    await expect(loadWidgetZoom()).resolves.toBe(DEFAULT_WIDGET_ZOOM)
+  })
+
+  it("loads and saves widget zoom", async () => {
+    await saveWidgetZoom(1.25)
+    await expect(loadWidgetZoom()).resolves.toBe(1.25)
+  })
+
+  it("falls back to default for invalid widget zoom", async () => {
+    storeState.set("widgetZoom", 9)
+    await expect(loadWidgetZoom()).resolves.toBe(DEFAULT_WIDGET_ZOOM)
   })
 })

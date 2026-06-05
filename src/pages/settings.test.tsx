@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import type { ReactNode } from "react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -42,6 +42,7 @@ vi.mock("@dnd-kit/utilities", () => ({
 }))
 
 import { SettingsPage } from "@/pages/settings"
+import { WIDGET_METRIC_SUGESTAO } from "@/lib/settings"
 
 const defaultProps = {
   plugins: [{ id: "a", name: "Alpha", enabled: true }],
@@ -67,6 +68,8 @@ const defaultProps = {
   onWidgetProviderIdsChange: vi.fn(),
   widgetMetric: null,
   onWidgetMetricChange: vi.fn(),
+  widgetZoom: 1,
+  onWidgetZoomChange: vi.fn(),
   availableMetrics: [] as string[],
 }
 
@@ -244,6 +247,23 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Show or hide the stats popup")).toBeInTheDocument()
   })
 
+  it("adjusts widget zoom from +/- controls", async () => {
+    const onWidgetZoomChange = vi.fn()
+    render(
+      <SettingsPage
+        {...defaultProps}
+        widgetZoom={1}
+        onWidgetZoomChange={onWidgetZoomChange}
+      />
+    )
+    await openTab("Widget")
+    expect(screen.getByText("100%")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Increase widget zoom" }))
+    expect(onWidgetZoomChange).toHaveBeenCalledWith(1.05)
+    await userEvent.click(screen.getByRole("button", { name: "Decrease widget zoom" }))
+    expect(onWidgetZoomChange).toHaveBeenCalledWith(0.95)
+  })
+
   it("selects a widget metric", async () => {
     const onWidgetMetricChange = vi.fn()
     render(
@@ -258,18 +278,25 @@ describe("SettingsPage", () => {
     expect(onWidgetMetricChange).toHaveBeenCalledWith("Total usage")
   })
 
-  it("resets widget metric to auto", async () => {
+  it("selects auto widget metric", async () => {
     const onWidgetMetricChange = vi.fn()
     render(
       <SettingsPage
         {...defaultProps}
-        availableMetrics={["Weekly"]}
-        widgetMetric="Weekly"
+        widgetMetric={WIDGET_METRIC_SUGESTAO}
         onWidgetMetricChange={onWidgetMetricChange}
       />
     )
     await openTab("Widget")
+    expect(screen.getByRole("radio", { name: "Auto" })).toHaveAttribute("aria-checked", "true")
     await userEvent.click(screen.getByRole("radio", { name: "Auto" }))
-    expect(onWidgetMetricChange).toHaveBeenCalledWith(null)
+    expect(onWidgetMetricChange).toHaveBeenCalledWith(WIDGET_METRIC_SUGESTAO)
+  })
+
+  it("shows auto as the first widget metric option", async () => {
+    render(<SettingsPage {...defaultProps} availableMetrics={["Weekly"]} />)
+    await openTab("Widget")
+    const group = screen.getByRole("radiogroup", { name: "Widget metric" })
+    expect(within(group).getAllByRole("radio")[0]).toHaveAccessibleName("Auto")
   })
 })

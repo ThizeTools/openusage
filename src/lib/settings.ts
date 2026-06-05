@@ -1,5 +1,9 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import type { PluginMeta } from "@/lib/plugin-types";
+import {
+  isWidgetZoom,
+  WIDGET_ZOOM_DEFAULT,
+} from "@/lib/widget-zoom";
 
 // Refresh cooldown duration in milliseconds (5 minutes)
 export const REFRESH_COOLDOWN_MS = 300_000;
@@ -27,6 +31,13 @@ export type WidgetProviderIds = string[] | null;
 /** Selected metric label shown in the widget; null = auto (weekly/total like the tray). */
 export type WidgetMetric = string | null;
 
+/** Pseudo-metric: each provider shows its most-used (most constrained) metric. */
+export const WIDGET_METRIC_MOST_USED = "__most-used__";
+/** Pseudo-metric: each provider shows all of its metrics at once. */
+export const WIDGET_METRIC_ALL = "__all__";
+/** Pseudo-metric: each provider shows the suggested metrics for the widget. */
+export const WIDGET_METRIC_SUGESTAO = "__sugestao__";
+
 export type GlobalShortcut = string | null;
 
 const SETTINGS_STORE_PATH = "settings.json";
@@ -45,6 +56,7 @@ const WIDGET_VISIBLE_KEY = "widgetVisible";
 const WIDGET_POSITION_KEY = "widgetPosition";
 const WIDGET_PROVIDER_IDS_KEY = "widgetProviderIds";
 const WIDGET_METRIC_KEY = "widgetMetric";
+const WIDGET_ZOOM_KEY = "widgetZoom";
 
 export const DEFAULT_AUTO_UPDATE_INTERVAL: AutoUpdateIntervalMinutes = 15;
 export const DEFAULT_THEME_MODE: ThemeMode = "system";
@@ -56,7 +68,8 @@ export const DEFAULT_START_ON_LOGIN = false;
 export const DEFAULT_WIDGET_LAYOUT: WidgetLayout = "vertical";
 export const DEFAULT_WIDGET_VISIBLE = false;
 export const DEFAULT_WIDGET_PROVIDER_IDS: WidgetProviderIds = null;
-export const DEFAULT_WIDGET_METRIC: WidgetMetric = null;
+export const DEFAULT_WIDGET_METRIC: WidgetMetric = WIDGET_METRIC_SUGESTAO;
+export { WIDGET_ZOOM_DEFAULT as DEFAULT_WIDGET_ZOOM } from "@/lib/widget-zoom";
 
 const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [1, 5, 15, 30];
 const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
@@ -416,5 +429,16 @@ export async function loadWidgetMetric(): Promise<WidgetMetric> {
 
 export async function saveWidgetMetric(metric: WidgetMetric): Promise<void> {
   await store.set(WIDGET_METRIC_KEY, metric);
+  await store.save();
+}
+
+export async function loadWidgetZoom(): Promise<number> {
+  const stored = await store.get<unknown>(WIDGET_ZOOM_KEY);
+  if (isWidgetZoom(stored)) return stored;
+  return WIDGET_ZOOM_DEFAULT;
+}
+
+export async function saveWidgetZoom(zoom: number): Promise<void> {
+  await store.set(WIDGET_ZOOM_KEY, zoom);
   await store.save();
 }

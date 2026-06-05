@@ -61,4 +61,119 @@ describe("WidgetRowItem", () => {
     expect(screen.getByTestId("widget-row")).toBeInTheDocument()
     expect(screen.getByText("62%")).toBeInTheDocument()
   })
+
+  it("renders labeled values per metric in multi-metric modes", () => {
+    const multi: WidgetRow = {
+      ...row,
+      metrics: [
+        { label: "Weekly", fraction: 0.25, expectedFraction: 0.5, tone: "ahead" },
+        { label: "Session", fraction: 0.8, expectedFraction: 0.75, tone: "behind" },
+      ],
+    }
+    render(<WidgetRowItem row={multi} layout="vertical" isDark={false} />)
+    expect(screen.getByText("Weekly")).toBeInTheDocument()
+    expect(screen.getByText("25%/50%")).toHaveClass("text-green-500")
+    expect(screen.getByText("Session")).toBeInTheDocument()
+    expect(screen.getByText("80%/75%")).toHaveClass("text-red-500")
+    // The single-value span is replaced by the metric list.
+    expect(screen.queryByText("62%")).not.toBeInTheDocument()
+  })
+
+  it("shows expected value inline for single value", () => {
+    render(
+      <WidgetRowItem
+        row={{ ...row, expectedFraction: 0.42 }}
+        layout="vertical"
+        isDark={false}
+      />
+    )
+    expect(screen.getByText("62%/42%")).toBeInTheDocument()
+  })
+
+  it("shows expected value inline for metric values", () => {
+    render(
+      <WidgetRowItem
+        row={{
+          ...row,
+          metrics: [{ label: "Weekly", fraction: 0.25, expectedFraction: 0.5, tone: "ahead" }],
+        }}
+        layout="vertical"
+        isDark={false}
+      />
+    )
+    expect(screen.getByText("25%/50%")).toBeInTheDocument()
+  })
+
+  it("hides percent signs for auto metric values", () => {
+    render(
+      <WidgetRowItem
+        row={{
+          ...row,
+          metrics: [
+            {
+              label: "Weekly",
+              fraction: 0.25,
+              expectedFraction: 0.5,
+              hidePercentSign: true,
+              tone: "ahead",
+            },
+          ],
+        }}
+        layout="vertical"
+        isDark={false}
+      />
+    )
+    expect(screen.getByText("25/50")).toBeInTheDocument()
+    expect(screen.queryByText("25%/50%")).not.toBeInTheDocument()
+  })
+
+  it("does not show expected value when expected fraction is missing", () => {
+    render(<WidgetRowItem row={row} layout="vertical" isDark={false} />)
+    expect(screen.getByText("62%")).toBeInTheDocument()
+    expect(screen.queryByText("62%/")).not.toBeInTheDocument()
+  })
+
+  it("keeps vertical metrics on the provider row", () => {
+    const multi: WidgetRow = {
+      ...row,
+      metrics: [{ label: "Weekly", fraction: 0.25, tone: "ahead" }],
+    }
+    render(<WidgetRowItem row={multi} layout="vertical" isDark={false} />)
+    expect(screen.getByText("Claude").parentElement).toHaveClass("flex", "items-center")
+    expect(screen.getByTestId("metric-list")).toHaveClass("flex-row", "items-center")
+  })
+
+  it("renders metric dividers only between metrics", () => {
+    const multi: WidgetRow = {
+      ...row,
+      metrics: [
+        { label: "Session", fraction: 0.25, tone: "ahead" },
+        { label: "Weekly", fraction: 0.5, tone: "neutral" },
+        { label: "Spark", fraction: 0.75, tone: "behind" },
+      ],
+    }
+    render(<WidgetRowItem row={multi} layout="horizontal" isDark={false} />)
+    expect(screen.getAllByTestId("metric-divider")).toHaveLength(2)
+  })
+
+  it("limited state wins over the metric list and expected indicator", () => {
+    const limitedUntilMs = Date.now() + 2 * 60 * 60 * 1000
+    render(
+      <WidgetRowItem
+        row={{
+          ...row,
+          tone: "behind",
+          limitedUntilMs,
+          expectedFraction: 0.5,
+          metrics: [{ label: "Weekly", fraction: 1, expectedFraction: 0.5, tone: "behind" }],
+        }}
+        layout="vertical"
+        isDark={false}
+      />
+    )
+    expect(screen.queryByText("Weekly")).not.toBeInTheDocument()
+    expect(screen.queryByText("100%/50%")).not.toBeInTheDocument()
+    const timeText = getTimeFormatter().format(limitedUntilMs)
+    expect(screen.getByText((text) => text.includes(timeText))).toBeInTheDocument()
+  })
 })

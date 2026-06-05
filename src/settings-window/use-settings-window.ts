@@ -5,6 +5,8 @@ import {
   enable as enableAutostart,
   isEnabled as isAutostartEnabled,
 } from "@tauri-apps/plugin-autostart"
+import { LazyStore } from "@tauri-apps/plugin-store"
+import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
 import type { PluginMeta } from "@/lib/plugin-types"
 import { getAvailableWidgetMetrics } from "@/lib/widget-rows"
 import {
@@ -41,6 +43,8 @@ import {
   saveWidgetLayout,
   saveWidgetMetric,
   saveWidgetProviderIds,
+  saveWidgetZoom,
+  loadWidgetZoom,
   type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type PluginSettings,
@@ -50,6 +54,7 @@ import {
   type WidgetMetric,
   type WidgetProviderIds,
 } from "@/lib/settings"
+import { clampWidgetZoom, WIDGET_ZOOM_DEFAULT } from "@/lib/widget-zoom"
 
 /**
  * Self-contained settings state for the dedicated Settings window. It reads from
@@ -69,6 +74,7 @@ export function useSettingsWindow() {
   const [widgetVisible, setWidgetVisible] = useState<boolean>(DEFAULT_WIDGET_VISIBLE)
   const [widgetProviderIds, setWidgetProviderIds] = useState<WidgetProviderIds>(DEFAULT_WIDGET_PROVIDER_IDS)
   const [widgetMetric, setWidgetMetric] = useState<WidgetMetric>(DEFAULT_WIDGET_METRIC)
+  const [widgetZoom, setWidgetZoom] = useState(WIDGET_ZOOM_DEFAULT)
 
   useEffect(() => {
     if (!isTauri()) return
@@ -80,7 +86,7 @@ export function useSettingsWindow() {
         setPluginsMeta(meta)
         const [
           stored, interval, theme, resetTimer, shortcut, stats,
-          login, layout, visible, providers, metric,
+          login, layout, visible, providers, metric, zoom,
         ] = await Promise.all([
           loadPluginSettings(),
           loadAutoUpdateInterval(),
@@ -93,6 +99,7 @@ export function useSettingsWindow() {
           loadWidgetVisible(),
           loadWidgetProviderIds(),
           loadWidgetMetric(),
+          loadWidgetZoom(),
         ])
         if (cancelled) return
         setPluginSettings(normalizePluginSettings(stored, meta))
@@ -106,6 +113,7 @@ export function useSettingsWindow() {
         setWidgetVisible(visible)
         setWidgetProviderIds(providers)
         setWidgetMetric(metric)
+        setWidgetZoom(zoom)
       } catch (error) {
         console.error("Failed to bootstrap settings window:", error)
       }
@@ -114,6 +122,45 @@ export function useSettingsWindow() {
       cancelled = true
     }
   }, [])
+
+  // Keep Settings live when another window writes the same shared store (widget
+  // double-click, popup reset-timer toggle, plugin nav actions).
+  useEffect(() => {
+    if (!isTauri()) return
+    const store = new LazyStore("settings.json")
+    let cancelled = false
+    const unlisteners: (() => void)[] = []
+    void (async () => {
+      const subscribe = async <T,>(key: string, apply: (value: T) => void) => {
+        const fn = await store.onKeyChange<T>(key, (value) => {
+          if (value !== undefined && value !== null) apply(value)
+        })
+        if (cancelled) fn()
+        else unlisteners.push(fn)
+      }
+      await subscribe<WidgetLayout>("widgetLayout", (value) => {
+        if (value === "vertical" || value === "horizontal") setWidgetLayout(value)
+      })
+      await subscribe<number>("widgetZoom", (value) => setWidgetZoom(clampWidgetZoom(value)))
+      await subscribe<ResetTimerDisplayMode>("resetTimerDisplayMode", (value) => {
+        if (value === "relative" || value === "absolute") setResetTimerDisplayMode(value)
+      })
+      await subscribe<PluginSettings>("plugins", (value) => {
+        setPluginsMeta((meta) => {
+          if (meta.length > 0) setPluginSettings(normalizePluginSettings(value, meta))
+          return meta
+        })
+      })
+    })()
+    return () => {
+      cancelled = true
+      for (const fn of unlisteners) fn()
+    }
+  }, [])
+
+  // Widget visibility can change from the tray, shortcut, or Escape — Rust
+  // emits widget:visibility on every change.
+  useWidgetVisibilitySync(setWidgetVisible)
 
   const persistPluginSettings = useCallback((next: PluginSettings) => {
     setPluginSettings(next)
@@ -225,6 +272,12 @@ export function useSettingsWindow() {
     void saveWidgetMetric(value).catch((error) => console.error("Failed to save widget metric:", error))
   }, [])
 
+  const handleWidgetZoomChange = useCallback((value: number) => {
+    const clamped = clampWidgetZoom(value)
+    setWidgetZoom(clamped)
+    void saveWidgetZoom(clamped).catch((error) => console.error("Failed to save widget zoom:", error))
+  }, [])
+
   const plugins = useMemo(() => {
     if (!pluginSettings) return []
     const disabled = new Set(pluginSettings.disabled)
@@ -255,6 +308,7 @@ export function useSettingsWindow() {
     widgetVisible,
     widgetProviderIds,
     widgetMetric,
+    widgetZoom,
     handleToggle,
     handleReorder,
     handleAutoUpdateIntervalChange,
@@ -267,5 +321,6 @@ export function useSettingsWindow() {
     handleWidgetVisibleChange,
     handleWidgetProviderIdsChange,
     handleWidgetMetricChange,
+    handleWidgetZoomChange,
   }
 }
