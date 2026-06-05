@@ -9,6 +9,23 @@ vi.mock("react-dom/client", () => ({
   },
 }))
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}))
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(async () => undefined),
+  warn: vi.fn(async () => undefined),
+}))
+
+vi.mock("@/App", () => ({
+  App: () => <div>App</div>,
+}))
+
+vi.mock("@/widget/WidgetApp", () => ({
+  WidgetApp: () => <div>Widget</div>,
+}))
+
 describe("main", () => {
   it("mounts app", async () => {
     document.body.innerHTML = '<div id="root"></div>'

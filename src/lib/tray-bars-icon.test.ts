@@ -91,7 +91,25 @@ describe("tray-bars-icon", () => {
     expect(svg).not.toContain("<rect ")
   })
 
-  it("renders provider icon", () => {
+  it("uses tint color for tray shapes and text", () => {
+    const barsSvg = makeTrayBarsSvg({
+      bars: [{ id: "a", fraction: 0.5 }],
+      sizePx: 36,
+      style: "bars",
+      tintColor: "#22c55e",
+    })
+    expect(barsSvg).toContain('fill="#22c55e"')
+
+    const percentSvg = makeTrayBarsSvg({
+      bars: [],
+      sizePx: 18,
+      percentText: "7",
+      tintColor: "#ef4444",
+    })
+    expect(percentSvg).toContain('fill="#ef4444"')
+  })
+
+  it("renders provider icon at full tray size", () => {
     const svg = makeTrayBarsSvg({
       bars: [],
       sizePx: 36,
@@ -99,6 +117,7 @@ describe("tray-bars-icon", () => {
     })
 
     expect(svg).toContain("<image ")
+    expect(svg).toContain('x="0" y="0" width="36" height="36"')
     expect(svg).toContain('href="data:image/svg+xml;base64,ABC"')
     const viewBox = svg.match(/viewBox="0 0 (\d+) (\d+)"/)
     expect(viewBox).toBeTruthy()
@@ -126,13 +145,20 @@ describe("tray-bars-icon", () => {
     expect(svg).not.toContain("<text ")
   })
 
-  it("renders svg text when percentage is provided", () => {
+  it("renders simple centered percent text without border or extra provider glyph", () => {
     const svg = makeTrayBarsSvg({
       bars: [],
-      sizePx: 18,
-      percentText: "70%",
+      sizePx: 32,
+      percentText: "7",
     })
-    expect(svg).toContain(">70%</text>")
+    expect(svg).toContain(">7</text>")
+    expect(svg).toContain('font-size="21"')
+    expect(svg).toContain('text-anchor="middle"')
+    expect(svg).not.toContain('stroke="black"')
+    expect(svg).not.toContain('stroke-width="1.5"')
+    expect(svg).not.toContain("drop-shadow")
+    expect(svg).not.toContain("<circle ")
+    expect(svg).not.toContain("<image ")
   })
 
   it("renderTrayBarsIcon rasterizes SVG to an Image using canvas", async () => {

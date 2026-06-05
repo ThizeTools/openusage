@@ -1,6 +1,5 @@
 import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginSettings } from "@/lib/settings"
-import { DEFAULT_DISPLAY_MODE, type DisplayMode } from "@/lib/settings"
 import { clamp01 } from "@/lib/utils"
 
 type PluginState = {
@@ -11,7 +10,10 @@ type PluginState = {
 
 export type TrayPrimaryBar = {
   id: string
+  label?: string
   fraction?: number
+  usedFraction?: number
+  expectedFraction?: number
 }
 
 type ProgressLine = Extract<
@@ -23,21 +25,38 @@ function isProgressLine(line: PluginOutput["lines"][number]): line is ProgressLi
   return line.type === "progress"
 }
 
+function expectedFractionForLine(line: ProgressLine, nowMs: number): number | undefined {
+  if (!line.resetsAt || typeof line.periodDurationMs !== "number") return undefined
+  if (!Number.isFinite(line.periodDurationMs) || line.periodDurationMs <= 0) return undefined
+  const resetsAtMs = Date.parse(line.resetsAt)
+  if (!Number.isFinite(resetsAtMs)) return undefined
+  const elapsedMs = nowMs - (resetsAtMs - line.periodDurationMs)
+  return clamp01(elapsedMs / line.periodDurationMs)
+}
+
 export function getTrayPrimaryBars(args: {
   pluginsMeta: PluginMeta[]
   pluginSettings: PluginSettings | null
   pluginStates: Record<string, PluginState | undefined>
   maxBars?: number
-  displayMode?: DisplayMode
   pluginId?: string
+  nowMs?: number
+  includeAllOverview?: boolean
+  preferredLabels?: string[]
+  preferredLabelsOnly?: boolean
+  includeAllMatches?: boolean
 }): TrayPrimaryBar[] {
   const {
     pluginsMeta,
     pluginSettings,
     pluginStates,
     maxBars = 4,
-    displayMode = DEFAULT_DISPLAY_MODE,
     pluginId,
+    nowMs = Date.now(),
+    includeAllOverview = false,
+    preferredLabels,
+    preferredLabelsOnly = false,
+    includeAllMatches = false,
   } = args
   if (!pluginSettings) return []
 
@@ -53,34 +72,59 @@ export function getTrayPrimaryBars(args: {
     const meta = metaById.get(id)
     if (!meta) continue
     
+    const overviewLabels = meta.lines
+      .filter((line) => line.type === "progress" && line.scope === "overview")
+      .map((line) => line.label)
+    const fallbackLabels = includeAllOverview ? overviewLabels : (meta.primaryCandidates ?? [])
+    const candidateLabels =
+      preferredLabels && preferredLabels.length > 0
+        ? preferredLabelsOnly
+          ? preferredLabels
+          : [
+              ...preferredLabels,
+              ...fallbackLabels.filter((label) => !preferredLabels.includes(label)),
+            ]
+        : fallbackLabels
+
     // Skip if no primary candidates defined
-    if (!meta.primaryCandidates || meta.primaryCandidates.length === 0) continue
+    if (!candidateLabels || candidateLabels.length === 0) continue
 
     const state = pluginStates[id]
     const data = state?.data ?? null
 
-    let fraction: number | undefined
-    if (data) {
-      // Find first candidate that exists in runtime data
-      const primaryLabel = meta.primaryCandidates.find((label) =>
-        data.lines.some((line) => isProgressLine(line) && line.label === label)
-      )
-      if (primaryLabel) {
-        const primaryLine = data.lines.find(
-          (line): line is ProgressLine =>
-            isProgressLine(line) && line.label === primaryLabel
-        )
-        if (primaryLine && primaryLine.limit > 0) {
-          const shownAmount =
-            displayMode === "used"
-              ? primaryLine.used
-              : primaryLine.limit - primaryLine.used
-          fraction = clamp01(shownAmount / primaryLine.limit)
-        }
+    const addLine = (line: ProgressLine | undefined) => {
+      if (line && line.limit > 0) {
+        const usedFraction = clamp01(line.used / line.limit)
+        const expectedFraction = expectedFractionForLine(line, nowMs)
+        out.push({
+          id,
+          label: line.label,
+          fraction: usedFraction,
+          usedFraction,
+          expectedFraction,
+        })
+      } else {
+        out.push({ id, label: undefined, fraction: undefined, usedFraction: undefined, expectedFraction: undefined })
       }
     }
 
-    out.push({ id, fraction })
+    if (data) {
+      const matchedLabels = candidateLabels.filter((label) =>
+        data.lines.some((line) => isProgressLine(line) && line.label === label)
+      )
+      const labels = includeAllMatches ? matchedLabels : matchedLabels.slice(0, 1)
+      for (const label of labels) {
+        addLine(data.lines.find(
+          (line): line is ProgressLine =>
+            isProgressLine(line) && line.label === label
+        ))
+        if (out.length >= maxBars) break
+      }
+      if (labels.length === 0) addLine(undefined)
+    } else {
+      addLine(undefined)
+    }
+
     if (out.length >= maxBars) break
   }
 

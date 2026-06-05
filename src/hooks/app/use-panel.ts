@@ -9,6 +9,11 @@ const PANEL_WIDTH = 400
 const MAX_HEIGHT_FALLBACK_PX = 600
 const MAX_HEIGHT_FRACTION_OF_MONITOR = 0.8
 
+function isWindowsPlatform() {
+  if (typeof navigator === "undefined") return false
+  return /Win/.test(navigator.platform)
+}
+
 type UsePanelArgs = {
   activeView: ActiveView
   setActiveView: (view: ActiveView) => void
@@ -69,6 +74,7 @@ export function usePanel({
 
   useEffect(() => {
     if (!isTauri()) return
+    if (isWindowsPlatform()) return
     if (showAbout) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -89,6 +95,8 @@ export function usePanel({
     async function setup() {
       const u1 = await listen<string>("tray:navigate", (event) => {
         setActiveView(event.payload as ActiveView)
+        // Reopening the panel must never restore a leftover About overlay.
+        setShowAbout(false)
         focusContainer()
       })
       if (cancelled) {
@@ -189,6 +197,7 @@ export function usePanel({
       try {
         const currentWindow = getCurrentWindow()
         await currentWindow.setSize(new PhysicalSize(width, height))
+        await invoke("reposition_panel")
       } catch (e) {
         console.error("Failed to resize window:", e)
       }

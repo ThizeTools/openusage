@@ -66,10 +66,10 @@ export function calculatePaceStatus(
 }
 
 /**
- * How much usage exceeds the ideal linear pace (same unit as used/limit).
- * Returns positive deficit or null when ahead/on-pace/incalculable.
+ * Signed usage drift from ideal linear pace (same unit as used/limit).
+ * Positive means over pace; negative means under pace.
  */
-export function calculateDeficit(
+export function calculateDrift(
   used: number,
   limit: number,
   resetsAtMs: number,
@@ -92,9 +92,6 @@ export function calculateDeficit(
   if (elapsedMs <= 0 || nowMs >= resetsAtMs) return null
 
   const elapsedFraction = elapsedMs / periodDurationMs
-  if (elapsedFraction < 0.05 && used < limit) return null
-
   const expectedUsage = elapsedFraction * limit
-  const deficit = used - expectedUsage
-  return deficit > 0 ? deficit : null
+  return used - expectedUsage
 }

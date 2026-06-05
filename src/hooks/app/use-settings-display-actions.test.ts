@@ -2,22 +2,29 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
-  saveDisplayModeMock,
   saveResetTimerDisplayModeMock,
   saveThemeModeMock,
-  saveTimeFormatModeMock,
+  saveWidgetLayoutMock,
+  invokeMock,
+  isTauriMock,
 } = vi.hoisted(() => ({
   saveThemeModeMock: vi.fn(),
-  saveDisplayModeMock: vi.fn(),
   saveResetTimerDisplayModeMock: vi.fn(),
-  saveTimeFormatModeMock: vi.fn(),
+  saveWidgetLayoutMock: vi.fn(),
+  invokeMock: vi.fn(),
+  isTauriMock: vi.fn(),
+}))
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: invokeMock,
+  isTauri: isTauriMock,
 }))
 
 vi.mock("@/lib/settings", () => ({
   saveThemeMode: saveThemeModeMock,
-  saveDisplayMode: saveDisplayModeMock,
   saveResetTimerDisplayMode: saveResetTimerDisplayModeMock,
-  saveTimeFormatMode: saveTimeFormatModeMock,
+  saveMenubarIconStyle: vi.fn().mockResolvedValue(undefined),
+  saveWidgetLayout: saveWidgetLayoutMock,
 }))
 
 import { useSettingsDisplayActions } from "@/hooks/app/use-settings-display-actions"
@@ -25,51 +32,71 @@ import { useSettingsDisplayActions } from "@/hooks/app/use-settings-display-acti
 describe("useSettingsDisplayActions", () => {
   beforeEach(() => {
     saveThemeModeMock.mockReset()
-    saveDisplayModeMock.mockReset()
     saveResetTimerDisplayModeMock.mockReset()
-    saveTimeFormatModeMock.mockReset()
+    saveWidgetLayoutMock.mockReset()
+    invokeMock.mockReset()
+    isTauriMock.mockReset()
     saveThemeModeMock.mockResolvedValue(undefined)
-    saveDisplayModeMock.mockResolvedValue(undefined)
     saveResetTimerDisplayModeMock.mockResolvedValue(undefined)
-    saveTimeFormatModeMock.mockResolvedValue(undefined)
+    saveWidgetLayoutMock.mockResolvedValue(undefined)
+    invokeMock.mockResolvedValue(undefined)
+    isTauriMock.mockReturnValue(true)
+  })
+
+  it("changes widget layout and toggles widget visibility", () => {
+    const setWidgetLayout = vi.fn()
+    const setWidgetVisible = vi.fn()
+
+    const { result } = renderHook(() =>
+      useSettingsDisplayActions({
+        setThemeMode: vi.fn(),
+        resetTimerDisplayMode: "relative",
+        setResetTimerDisplayMode: vi.fn(),
+        setMenubarIconStyle: vi.fn(),
+        setWidgetLayout,
+        setWidgetVisible,
+        scheduleTrayIconUpdate: vi.fn(),
+      })
+    )
+
+    act(() => {
+      result.current.handleWidgetLayoutChange("horizontal")
+      result.current.handleWidgetVisibleChange(true)
+    })
+
+    expect(setWidgetLayout).toHaveBeenCalledWith("horizontal")
+    expect(saveWidgetLayoutMock).toHaveBeenCalledWith("horizontal")
+    expect(setWidgetVisible).toHaveBeenCalledWith(true)
+    expect(invokeMock).toHaveBeenCalledWith("set_widget_visible", { visible: true })
   })
 
   it("applies display-related setting changes", () => {
     const setThemeMode = vi.fn()
-    const setDisplayMode = vi.fn()
     const setResetTimerDisplayMode = vi.fn()
-    const setTimeFormatMode = vi.fn()
     const scheduleTrayIconUpdate = vi.fn()
 
     const { result } = renderHook(() =>
       useSettingsDisplayActions({
         setThemeMode,
-        setDisplayMode,
         resetTimerDisplayMode: "relative",
         setResetTimerDisplayMode,
-        setTimeFormatMode,
         setMenubarIconStyle: vi.fn(),
+        setWidgetLayout: vi.fn(),
+        setWidgetVisible: vi.fn(),
         scheduleTrayIconUpdate,
       })
     )
 
     act(() => {
       result.current.handleThemeModeChange("dark")
-      result.current.handleDisplayModeChange("used")
       result.current.handleResetTimerDisplayModeChange("absolute")
-      result.current.handleTimeFormatModeChange("24h")
     })
 
     expect(setThemeMode).toHaveBeenCalledWith("dark")
-    expect(setDisplayMode).toHaveBeenCalledWith("used")
     expect(setResetTimerDisplayMode).toHaveBeenCalledWith("absolute")
-    expect(setTimeFormatMode).toHaveBeenCalledWith("24h")
-    expect(scheduleTrayIconUpdate).toHaveBeenCalledWith("settings", 0)
 
     expect(saveThemeModeMock).toHaveBeenCalledWith("dark")
-    expect(saveDisplayModeMock).toHaveBeenCalledWith("used")
     expect(saveResetTimerDisplayModeMock).toHaveBeenCalledWith("absolute")
-    expect(saveTimeFormatModeMock).toHaveBeenCalledWith("24h")
   })
 
   it("toggles reset timer mode in both directions", () => {
@@ -79,11 +106,11 @@ describe("useSettingsDisplayActions", () => {
       ({ mode }: { mode: "relative" | "absolute" }) =>
         useSettingsDisplayActions({
           setThemeMode: vi.fn(),
-          setDisplayMode: vi.fn(),
           resetTimerDisplayMode: mode,
           setResetTimerDisplayMode,
-          setTimeFormatMode: vi.fn(),
           setMenubarIconStyle: vi.fn(),
+          setWidgetLayout: vi.fn(),
+          setWidgetVisible: vi.fn(),
           scheduleTrayIconUpdate: vi.fn(),
         }),
       { initialProps: { mode: "relative" as const } }
@@ -103,40 +130,31 @@ describe("useSettingsDisplayActions", () => {
 
   it("logs persistence failures", async () => {
     const themeError = new Error("theme failed")
-    const displayError = new Error("display failed")
     const resetError = new Error("reset failed")
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     saveThemeModeMock.mockRejectedValueOnce(themeError)
-    saveDisplayModeMock.mockRejectedValueOnce(displayError)
     saveResetTimerDisplayModeMock.mockRejectedValueOnce(resetError)
-
-    const timeFormatError = new Error("time format failed")
-    saveTimeFormatModeMock.mockRejectedValueOnce(timeFormatError)
 
     const { result } = renderHook(() =>
       useSettingsDisplayActions({
         setThemeMode: vi.fn(),
-        setDisplayMode: vi.fn(),
         resetTimerDisplayMode: "relative",
         setResetTimerDisplayMode: vi.fn(),
-        setTimeFormatMode: vi.fn(),
         setMenubarIconStyle: vi.fn(),
+        setWidgetLayout: vi.fn(),
+        setWidgetVisible: vi.fn(),
         scheduleTrayIconUpdate: vi.fn(),
       })
     )
 
     act(() => {
       result.current.handleThemeModeChange("light")
-      result.current.handleDisplayModeChange("left")
       result.current.handleResetTimerDisplayModeChange("relative")
-      result.current.handleTimeFormatModeChange("12h")
     })
 
     await waitFor(() => {
       expect(errorSpy).toHaveBeenCalledWith("Failed to save theme mode:", themeError)
-      expect(errorSpy).toHaveBeenCalledWith("Failed to save display mode:", displayError)
       expect(errorSpy).toHaveBeenCalledWith("Failed to save reset timer display mode:", resetError)
-      expect(errorSpy).toHaveBeenCalledWith("Failed to save time format mode:", timeFormatError)
     })
 
     errorSpy.mockRestore()

@@ -1,9 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { overviewPageMock, providerDetailPageMock, settingsPageMock } = vi.hoisted(() => ({
+const { overviewPageMock, providerDetailPageMock } = vi.hoisted(() => ({
   overviewPageMock: vi.fn(),
-  settingsPageMock: vi.fn(),
   providerDetailPageMock: vi.fn(),
 }))
 
@@ -11,13 +10,6 @@ vi.mock("@/pages/overview", () => ({
   OverviewPage: (props: unknown) => {
     overviewPageMock(props)
     return <div data-testid="overview-page" />
-  },
-}))
-
-vi.mock("@/pages/settings", () => ({
-  SettingsPage: (props: unknown) => {
-    settingsPageMock(props)
-    return <div data-testid="settings-page" />
   },
 }))
 
@@ -71,7 +63,6 @@ function createProps(): AppContentProps {
 describe("AppContent", () => {
   beforeEach(() => {
     overviewPageMock.mockReset()
-    settingsPageMock.mockReset()
     providerDetailPageMock.mockReset()
     useAppUiStore.getState().resetState()
     useAppPreferencesStore.getState().resetState()
@@ -83,14 +74,6 @@ describe("AppContent", () => {
 
     expect(screen.getByTestId("overview-page")).toBeInTheDocument()
     expect(overviewPageMock).toHaveBeenCalledTimes(1)
-  })
-
-  it("renders settings page for settings view", () => {
-    useAppUiStore.getState().setActiveView("settings")
-    render(<AppContent {...createProps()} />)
-
-    expect(screen.getByTestId("settings-page")).toBeInTheDocument()
-    expect(settingsPageMock).toHaveBeenCalledTimes(1)
   })
 
   it("passes retry callback for provider detail view", () => {

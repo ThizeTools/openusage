@@ -16,7 +16,9 @@ OpenUsage lives in your menu bar and shows you how much of your AI coding subscr
 
 - **One glance.** All your AI tools, one panel.
 - **Always up-to-date.** Refreshes automatically on a schedule you pick.
-- **Global shortcut.** Toggle the panel from anywhere with a customizable keyboard shortcut.
+- **Global shortcuts.** Separate customizable shortcuts to toggle the stats popup and the floating widget from anywhere.
+- **Floating widget.** Optional always-on-top, draggable strip with one compact line per provider. Toggle it from the tray or Settings; pick which providers and which metric (weekly/total/…) it shows; layout switches between vertical and horizontal.
+- **Dedicated Settings window.** Settings open in their own resizable window with custom Windows controls; the tray popup stays focused on your usage.
 - **Lightweight.** Opens instantly, stays out of your way.
 - **Plugin-based.** New providers get added without updating the whole app.
 - **[Local HTTP API](docs/local-http-api.md).** Other apps can read your usage data from `127.0.0.1:6736`.
@@ -100,4 +102,26 @@ Inspired by [CodexBar](https://github.com/steipete/CodexBar) by [@steipete](http
 
 ### Stack
 
-...
+- Bun
+- Vite + React
+- Tauri v2
+- Rust
+
+### Windows local build
+
+Windows releases are not published automatically yet, but you can build locally from source:
+
+```powershell
+bun install
+bun run bundle:plugins
+bun run build
+bun tauri build
+```
+
+For release builds with `.env` signing variables loaded:
+
+```powershell
+bun run build:release
+```
+
+The app uses the Windows tray, Windows Credential Manager for supported plugin secrets, and bundled SQLite support. Provider support still depends on where each provider app stores credentials on Windows.

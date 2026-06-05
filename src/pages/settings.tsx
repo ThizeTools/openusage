@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -19,181 +20,27 @@ import { GripVertical } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { GlobalShortcutSection } from "@/components/global-shortcut-section";
-import { getBarFillLayout, getTrayIconSizePx } from "@/lib/tray-bars-icon";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   AUTO_UPDATE_OPTIONS,
-  DISPLAY_MODE_OPTIONS,
-  MENUBAR_ICON_STYLE_OPTIONS,
   RESET_TIMER_DISPLAY_OPTIONS,
   THEME_OPTIONS,
-  TIME_FORMAT_OPTIONS,
+  WIDGET_LAYOUT_OPTIONS,
   type AutoUpdateIntervalMinutes,
-  type DisplayMode,
   type GlobalShortcut,
-  type MenubarIconStyle,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type TimeFormatMode,
+  type WidgetLayout,
+  type WidgetMetric,
+  type WidgetProviderIds,
 } from "@/lib/settings";
 import { getTimeFormatter } from "@/lib/reset-tooltip";
-import type { TraySettingsPreview } from "@/hooks/app/use-tray-icon";
 import { cn } from "@/lib/utils";
 
 interface PluginConfig {
   id: string;
   name: string;
   enabled: boolean;
-}
-
-const TRAY_PREVIEW_SIZE_PX = getTrayIconSizePx(1);
-
-const PREVIEW_BAR_TRACK_PX = 20;
-
-function getPreviewBarLayout(fraction: number): { fillPercent: number; remainderPercent: number } {
-  const { fillW, remainderDrawW } = getBarFillLayout(PREVIEW_BAR_TRACK_PX, fraction);
-  return {
-    fillPercent: (fillW / PREVIEW_BAR_TRACK_PX) * 100,
-    remainderPercent: (remainderDrawW / PREVIEW_BAR_TRACK_PX) * 100,
-  };
-}
-
-function ProviderIconMask({
-  iconUrl,
-  isActive,
-  sizePx,
-}: {
-  iconUrl?: string;
-  isActive: boolean;
-  sizePx: number;
-}) {
-  const colorClass = isActive ? "bg-primary-foreground" : "bg-foreground";
-  if (iconUrl) {
-    return (
-      <div
-        aria-hidden
-        className={cn("shrink-0", colorClass)}
-        style={{
-          width: `${sizePx}px`,
-          height: `${sizePx}px`,
-          WebkitMaskImage: `url(${iconUrl})`,
-          WebkitMaskSize: "contain",
-          WebkitMaskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          maskImage: `url(${iconUrl})`,
-          maskSize: "contain",
-          maskRepeat: "no-repeat",
-          maskPosition: "center",
-        }}
-      />
-    );
-  }
-  const textClass = isActive ? "text-primary-foreground" : "text-foreground";
-  return (
-    <svg aria-hidden viewBox="0 0 26 26" className={cn("shrink-0", textClass)} style={{ width: `${sizePx}px`, height: `${sizePx}px` }}>
-      <circle cx="13" cy="13" r="9" fill="none" stroke="currentColor" strokeWidth="3.5" opacity={0.3} />
-    </svg>
-  );
-}
-
-function MenubarIconStylePreview({
-  style,
-  isActive,
-  traySettingsPreview,
-}: {
-  style: MenubarIconStyle;
-  isActive: boolean;
-  traySettingsPreview: TraySettingsPreview;
-}) {
-  const textClass = isActive ? "text-primary-foreground" : "text-foreground";
-
-  if (style === "provider") {
-    return (
-      <div className="inline-flex items-center gap-0.5">
-        <ProviderIconMask
-          iconUrl={traySettingsPreview.providerIconUrl}
-          isActive={isActive}
-          sizePx={TRAY_PREVIEW_SIZE_PX}
-        />
-        <span className={cn("text-[12px] font-semibold tabular-nums leading-none", textClass)}>
-          {traySettingsPreview.providerPercentText}
-        </span>
-      </div>
-    );
-  }
-
-  if (style === "bars") {
-    const trackClass = isActive ? "bg-primary-foreground/15" : "bg-foreground/15";
-    const remainderClass = isActive ? "bg-primary-foreground/20" : "bg-foreground/15";
-    const fillClass = isActive ? "bg-primary-foreground" : "bg-foreground";
-    const fractions = traySettingsPreview.bars.length > 0
-      ? traySettingsPreview.bars.map((b) => b.fraction ?? 0)
-      : [0.83, 0.7, 0.56];
-
-    return (
-      <div className="flex items-center">
-        <div className="flex flex-col gap-0.5 w-5">
-          {fractions.map((fraction, i) => {
-            const { fillPercent, remainderPercent } = getPreviewBarLayout(fraction);
-            return (
-              <div key={i} className={cn("relative h-1 rounded-sm", trackClass)}>
-                {remainderPercent > 0 && (
-                  <span
-                    aria-hidden
-                    className={remainderClass}
-                    style={{
-                      position: "absolute",
-                      right: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: `${remainderPercent}%`,
-                      borderRadius: "1px 2px 2px 1px",
-                    }}
-                  />
-                )}
-                <div
-                  className={cn("h-1", fillClass)}
-                  style={{ width: `${fillPercent}%`, borderRadius: "2px 1px 1px 2px" }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (style === "donut") {
-    const fraction = traySettingsPreview.providerBars[0]?.fraction ?? 0;
-    const clamped = Math.max(0, Math.min(1, fraction));
-    return (
-      <div className="inline-flex items-center gap-1">
-        <ProviderIconMask
-          iconUrl={traySettingsPreview.providerIconUrl}
-          isActive={isActive}
-          sizePx={TRAY_PREVIEW_SIZE_PX}
-        />
-        <svg aria-hidden viewBox="0 0 26 26" className={cn("shrink-0", textClass)} style={{ width: `${TRAY_PREVIEW_SIZE_PX}px`, height: `${TRAY_PREVIEW_SIZE_PX}px` }}>
-          <circle
-            cx="13" cy="13" r="9"
-            fill="none" stroke="currentColor" strokeWidth="4"
-            opacity={isActive ? 0.2 : 0.15}
-          />
-          {clamped > 0 && (
-            <circle
-              cx="13" cy="13" r="9"
-              fill="none" stroke="currentColor" strokeWidth="4"
-              strokeLinecap="butt"
-              pathLength="100"
-              strokeDasharray={`${Math.round(clamped * 100)} 100`}
-              transform="rotate(-90 13 13)"
-            />
-          )}
-        </svg>
-      </div>
-    );
-  }
-
-  return null;
 }
 
 function SortablePluginItem({
@@ -267,19 +114,25 @@ interface SettingsPageProps {
   onAutoUpdateIntervalChange: (value: AutoUpdateIntervalMinutes) => void;
   themeMode: ThemeMode;
   onThemeModeChange: (value: ThemeMode) => void;
-  displayMode: DisplayMode;
-  onDisplayModeChange: (value: DisplayMode) => void;
   resetTimerDisplayMode: ResetTimerDisplayMode;
   onResetTimerDisplayModeChange: (value: ResetTimerDisplayMode) => void;
-  timeFormatMode: TimeFormatMode;
-  onTimeFormatModeChange: (value: TimeFormatMode) => void;
-  menubarIconStyle: MenubarIconStyle;
-  onMenubarIconStyleChange: (value: MenubarIconStyle) => void;
-  traySettingsPreview: TraySettingsPreview;
   globalShortcut: GlobalShortcut;
   onGlobalShortcutChange: (value: GlobalShortcut) => void;
+  statsShortcut: GlobalShortcut;
+  onStatsShortcutChange: (value: GlobalShortcut) => void;
   startOnLogin: boolean;
   onStartOnLoginChange: (value: boolean) => void;
+  widgetLayout: WidgetLayout;
+  onWidgetLayoutChange: (value: WidgetLayout) => void;
+  widgetVisible: boolean;
+  onWidgetVisibleChange: (value: boolean) => void;
+  widgetProviderIds: WidgetProviderIds;
+  onWidgetProviderIdsChange: (value: WidgetProviderIds) => void;
+  widgetMetric: WidgetMetric;
+  onWidgetMetricChange: (value: WidgetMetric) => void;
+  availableMetrics: string[];
+  activeTab?: string;
+  onActiveTabChange?: (tab: string) => void;
 }
 
 export function SettingsPage({
@@ -290,20 +143,33 @@ export function SettingsPage({
   onAutoUpdateIntervalChange,
   themeMode,
   onThemeModeChange,
-  displayMode,
-  onDisplayModeChange,
   resetTimerDisplayMode,
   onResetTimerDisplayModeChange,
-  timeFormatMode,
-  onTimeFormatModeChange,
-  menubarIconStyle,
-  onMenubarIconStyleChange,
-  traySettingsPreview,
   globalShortcut,
   onGlobalShortcutChange,
+  statsShortcut,
+  onStatsShortcutChange,
   startOnLogin,
   onStartOnLoginChange,
+  widgetLayout,
+  onWidgetLayoutChange,
+  widgetVisible,
+  onWidgetVisibleChange,
+  widgetProviderIds,
+  onWidgetProviderIdsChange,
+  widgetMetric,
+  onWidgetMetricChange,
+  availableMetrics,
+  activeTab,
+  onActiveTabChange,
 }: SettingsPageProps) {
+  const [localTab, setLocalTab] = useState("general");
+  const effectiveTab = activeTab ?? localTab;
+  const handleTabChange = (tab: string) => {
+    setLocalTab(tab);
+    onActiveTabChange?.(tab);
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -322,9 +188,27 @@ export function SettingsPage({
       onReorder(next.map((item) => item.id));
     }
   };
+  const enabledWidgetProviderIds = widgetProviderIds ?? plugins
+    .filter((plugin) => plugin.enabled)
+    .map((plugin) => plugin.id);
+  const widgetProviderIdSet = new Set(enabledWidgetProviderIds);
+  const handleWidgetProviderToggle = (pluginId: string, checked: boolean) => {
+    const next = new Set(enabledWidgetProviderIds);
+    if (checked) next.add(pluginId);
+    else next.delete(pluginId);
+    onWidgetProviderIdsChange(plugins.filter((plugin) => next.has(plugin.id)).map((plugin) => plugin.id));
+  };
 
   return (
-    <div className="py-3 space-y-4">
+    <Tabs value={effectiveTab} onValueChange={handleTabChange} className="py-3">
+      <TabsList className="w-full">
+        <TabsTrigger value="general">General</TabsTrigger>
+        <TabsTrigger value="plugins">Plugins</TabsTrigger>
+        <TabsTrigger value="widget">Widget</TabsTrigger>
+        <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="general" className="space-y-4">
       <section>
         <h3 className="text-lg font-semibold mb-0">Auto Refresh</h3>
         <p className="text-sm text-muted-foreground mb-2">
@@ -353,33 +237,6 @@ export function SettingsPage({
         </div>
       </section>
       <section>
-        <h3 className="text-lg font-semibold mb-0">Usage Mode</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          Glass half full or half empty
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Usage display mode">
-            {DISPLAY_MODE_OPTIONS.map((option) => {
-              const isActive = option.value === displayMode;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onDisplayModeChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
         <h3 className="text-lg font-semibold mb-0">Reset Timers</h3>
         <p className="text-sm text-muted-foreground mb-2">
           Countdown or clock time
@@ -388,7 +245,7 @@ export function SettingsPage({
           <div className="flex gap-1" role="radiogroup" aria-label="Reset timer display mode">
             {RESET_TIMER_DISPLAY_OPTIONS.map((option) => {
               const isActive = option.value === resetTimerDisplayMode;
-              const absoluteTimeExample = getTimeFormatter(timeFormatMode).format(new Date(2026, 1, 2, 11, 4));
+              const absoluteTimeExample = getTimeFormatter().format(new Date(2026, 1, 2, 11, 4));
               const example = option.value === "relative" ? "5h 12m" : `today at ${absoluteTimeExample}`;
               return (
                 <Button
@@ -410,75 +267,6 @@ export function SettingsPage({
                   >
                     {example}
                   </span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Time Format</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          12-hour or 24-hour clock
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Time format">
-            {TIME_FORMAT_OPTIONS.map((option) => {
-              const isActive = option.value === timeFormatMode;
-              const example = getTimeFormatter(option.value).format(new Date(2026, 1, 2, 11, 4));
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  aria-label={option.label}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 flex flex-col items-center gap-0 py-2 h-auto"
-                  onClick={() => onTimeFormatModeChange(option.value)}
-                >
-                  <span>{option.label}</span>
-                  <span
-                    className={cn(
-                      "text-xs font-normal",
-                      isActive ? "text-primary-foreground/80" : "text-muted-foreground"
-                    )}
-                  >
-                    {example}
-                  </span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Menubar Icon</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          What shows in the menu bar
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Menubar icon style">
-            {MENUBAR_ICON_STYLE_OPTIONS.map((option) => {
-              const isActive = option.value === menubarIconStyle;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-label={option.label}
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 h-9 flex items-center justify-center"
-                  onClick={() => onMenubarIconStyleChange(option.value)}
-                >
-                  <MenubarIconStylePreview
-                    style={option.value}
-                    isActive={isActive}
-                    traySettingsPreview={traySettingsPreview}
-                  />
                 </Button>
               );
             })}
@@ -512,10 +300,6 @@ export function SettingsPage({
           </div>
         </div>
       </section>
-      <GlobalShortcutSection
-        globalShortcut={globalShortcut}
-        onGlobalShortcutChange={onGlobalShortcutChange}
-      />
       <section>
         <h3 className="text-lg font-semibold mb-0">Start on Login</h3>
         <p className="text-sm text-muted-foreground mb-2">
@@ -530,6 +314,9 @@ export function SettingsPage({
           Start on login
         </label>
       </section>
+      </TabsContent>
+
+      <TabsContent value="plugins" className="space-y-4">
       <section>
         <h3 className="text-lg font-semibold mb-0">Plugins</h3>
         <p className="text-sm text-muted-foreground mb-2">
@@ -556,6 +343,99 @@ export function SettingsPage({
           </DndContext>
         </div>
       </section>
-    </div>
+      </TabsContent>
+
+      <TabsContent value="widget" className="space-y-4">
+      <section>
+        <h3 className="text-lg font-semibold mb-0">Floating Widget</h3>
+        <p className="text-sm text-muted-foreground mb-2">
+          Always-on-top usage strip
+        </p>
+        <label className="flex items-center gap-2 text-sm select-none text-foreground mb-2">
+          <Checkbox
+            key={`widget-visible-${widgetVisible}`}
+            checked={widgetVisible}
+            onCheckedChange={(checked) => onWidgetVisibleChange(checked === true)}
+          />
+          Show floating widget
+        </label>
+        <div className="bg-muted/50 rounded-lg p-1">
+          <div className="flex gap-1" role="radiogroup" aria-label="Widget layout">
+            {WIDGET_LAYOUT_OPTIONS.map((option) => {
+              const isActive = option.value === widgetLayout;
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={isActive}
+                  variant={isActive ? "default" : "outline"}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => onWidgetLayoutChange(option.value)}
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground mt-3 mb-1">Metric</p>
+        <div className="bg-muted/50 rounded-lg p-1">
+          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Widget metric">
+            {[{ value: null as WidgetMetric, label: "Auto" }, ...availableMetrics.map((m) => ({ value: m as WidgetMetric, label: m }))].map((option) => {
+              const isActive = (widgetMetric ?? null) === option.value;
+              return (
+                <Button
+                  key={option.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={isActive}
+                  variant={isActive ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => onWidgetMetricChange(option.value)}
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground mt-3 mb-1">Providers</p>
+        <div className="bg-muted/50 rounded-lg p-1 space-y-1">
+          {plugins.filter((plugin) => plugin.enabled).map((plugin) => (
+            <label
+              key={`widget-provider-${plugin.id}`}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-md bg-card text-sm select-none",
+                !plugin.enabled && "text-muted-foreground"
+              )}
+            >
+              <Checkbox
+                key={`widget-provider-${plugin.id}-${widgetProviderIdSet.has(plugin.id)}`}
+                checked={widgetProviderIdSet.has(plugin.id)}
+                disabled={!plugin.enabled}
+                onCheckedChange={(checked) => handleWidgetProviderToggle(plugin.id, checked === true)}
+              />
+              <span className="flex-1">{plugin.name}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+      </TabsContent>
+
+      <TabsContent value="shortcuts" className="space-y-4">
+      <GlobalShortcutSection
+        globalShortcut={globalShortcut}
+        onGlobalShortcutChange={onGlobalShortcutChange}
+      />
+      <GlobalShortcutSection
+        globalShortcut={statsShortcut}
+        onGlobalShortcutChange={onStatsShortcutChange}
+        title="Stats Shortcut"
+        description="Show or hide the stats popup"
+      />
+      </TabsContent>
+    </Tabs>
   );
 }

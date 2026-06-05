@@ -51,29 +51,31 @@ const defaultProps = {
   onAutoUpdateIntervalChange: vi.fn(),
   themeMode: "system" as const,
   onThemeModeChange: vi.fn(),
-  displayMode: "used" as const,
-  onDisplayModeChange: vi.fn(),
   resetTimerDisplayMode: "relative" as const,
   onResetTimerDisplayModeChange: vi.fn(),
-  timeFormatMode: "auto" as const,
-  onTimeFormatModeChange: vi.fn(),
-  menubarIconStyle: "provider" as const,
-  onMenubarIconStyleChange: vi.fn(),
-  traySettingsPreview: {
-    bars: [{ id: "a", fraction: 0.7 }],
-    providerBars: [{ id: "a", fraction: 0.7 }],
-    providerIconUrl: "icon-a",
-    providerPercentText: "70%",
-  },
   globalShortcut: null,
   onGlobalShortcutChange: vi.fn(),
+  statsShortcut: null,
+  onStatsShortcutChange: vi.fn(),
   startOnLogin: false,
   onStartOnLoginChange: vi.fn(),
+  widgetLayout: "vertical" as const,
+  onWidgetLayoutChange: vi.fn(),
+  widgetVisible: false,
+  onWidgetVisibleChange: vi.fn(),
+  widgetProviderIds: null,
+  onWidgetProviderIdsChange: vi.fn(),
+  widgetMetric: null,
+  onWidgetMetricChange: vi.fn(),
+  availableMetrics: [] as string[],
 }
 
 afterEach(() => {
   cleanup()
 })
+
+const openTab = (name: "General" | "Shortcuts" | "Widget" | "Plugins") =>
+  userEvent.click(screen.getByRole("tab", { name }))
 
 describe("SettingsPage", () => {
   it("toggles plugins", async () => {
@@ -87,12 +89,13 @@ describe("SettingsPage", () => {
         onToggle={onToggle}
       />
     )
+    await openTab("Plugins")
     const checkboxes = screen.getAllByRole("checkbox")
     await userEvent.click(checkboxes[checkboxes.length - 1])
     expect(onToggle).toHaveBeenCalledWith("b")
   })
 
-  it("reorders plugins on drag end", () => {
+  it("reorders plugins on drag end", async () => {
     const onReorder = vi.fn()
     render(
       <SettingsPage
@@ -104,11 +107,12 @@ describe("SettingsPage", () => {
         onReorder={onReorder}
       />
     )
+    await openTab("Plugins")
     latestOnDragEnd?.({ active: { id: "a" }, over: { id: "b" } })
     expect(onReorder).toHaveBeenCalledWith(["b", "a"])
   })
 
-  it("ignores invalid drag end", () => {
+  it("ignores invalid drag end", async () => {
     const onReorder = vi.fn()
     render(
       <SettingsPage
@@ -116,6 +120,7 @@ describe("SettingsPage", () => {
         onReorder={onReorder}
       />
     )
+    await openTab("Plugins")
     latestOnDragEnd?.({ active: { id: "a" }, over: null })
     latestOnDragEnd?.({ active: { id: "a" }, over: { id: "a" } })
     expect(onReorder).not.toHaveBeenCalled()
@@ -159,18 +164,6 @@ describe("SettingsPage", () => {
     expect(onThemeModeChange).toHaveBeenCalledWith("dark")
   })
 
-  it("updates display mode", async () => {
-    const onDisplayModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onDisplayModeChange={onDisplayModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Left" }))
-    expect(onDisplayModeChange).toHaveBeenCalledWith("left")
-  })
-
   it("updates reset timer display mode", async () => {
     const onResetTimerDisplayModeChange = vi.fn()
     render(
@@ -183,9 +176,9 @@ describe("SettingsPage", () => {
     expect(onResetTimerDisplayModeChange).toHaveBeenCalledWith("absolute")
   })
 
-  it("renders renamed usage section heading", () => {
+  it("does not render the removed usage mode section", () => {
     render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Usage Mode")).toBeInTheDocument()
+    expect(screen.queryByText("Usage Mode")).not.toBeInTheDocument()
   })
 
   it("renders reset timers section heading", () => {
@@ -193,64 +186,18 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Reset Timers")).toBeInTheDocument()
   })
 
-  it("renders time format section heading", () => {
+  it("does not render manual time format controls", () => {
     render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Time Format")).toBeInTheDocument()
-    expect(screen.getByText("12-hour or 24-hour clock")).toBeInTheDocument()
+    expect(screen.queryByText("Time Format")).not.toBeInTheDocument()
+    expect(screen.queryByText("12-hour or 24-hour clock")).not.toBeInTheDocument()
+    expect(screen.queryByRole("radio", { name: "12-hour" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("radio", { name: "24-hour" })).not.toBeInTheDocument()
   })
 
-  it("updates time format mode to 12h", async () => {
-    const onTimeFormatModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onTimeFormatModeChange={onTimeFormatModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "12-hour" }))
-    expect(onTimeFormatModeChange).toHaveBeenCalledWith("12h")
-  })
-
-  it("updates time format mode to 24h", async () => {
-    const onTimeFormatModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onTimeFormatModeChange={onTimeFormatModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "24-hour" }))
-    expect(onTimeFormatModeChange).toHaveBeenCalledWith("24h")
-  })
-
-  it("renders menubar icon section", () => {
+  it("does not render menubar icon section", () => {
     render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Menubar Icon")).toBeInTheDocument()
-    expect(screen.getByText("What shows in the menu bar")).toBeInTheDocument()
-  })
-
-  it("clicking Bars triggers onMenubarIconStyleChange(\"bars\")", async () => {
-    const onMenubarIconStyleChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onMenubarIconStyleChange={onMenubarIconStyleChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Bars" }))
-    expect(onMenubarIconStyleChange).toHaveBeenCalledWith("bars")
-  })
-
-  it("clicking Donut triggers onMenubarIconStyleChange(\"donut\")", async () => {
-    const onMenubarIconStyleChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onMenubarIconStyleChange={onMenubarIconStyleChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Donut" }))
-    expect(onMenubarIconStyleChange).toHaveBeenCalledWith("donut")
+    expect(screen.queryByText("Menubar Icon")).not.toBeInTheDocument()
+    expect(screen.queryByText("What shows in the menu bar")).not.toBeInTheDocument()
   })
 
   it("does not render removed bar icon controls", () => {
@@ -269,5 +216,60 @@ describe("SettingsPage", () => {
     )
     await userEvent.click(screen.getByText("Start on login"))
     expect(onStartOnLoginChange).toHaveBeenCalledWith(true)
+  })
+
+  it("toggles floating widget providers separately from enabled plugins", async () => {
+    const onWidgetProviderIdsChange = vi.fn()
+    render(
+      <SettingsPage
+        {...defaultProps}
+        plugins={[
+          { id: "a", name: "Alpha", enabled: true },
+          { id: "b", name: "Beta", enabled: true },
+        ]}
+        widgetProviderIds={["a"]}
+        onWidgetProviderIdsChange={onWidgetProviderIdsChange}
+      />
+    )
+
+    await openTab("Widget")
+    await userEvent.click(screen.getByLabelText("Beta"))
+    expect(onWidgetProviderIdsChange).toHaveBeenCalledWith(["a", "b"])
+  })
+
+  it("renders the stats shortcut section", async () => {
+    render(<SettingsPage {...defaultProps} />)
+    await openTab("Shortcuts")
+    expect(screen.getByText("Stats Shortcut")).toBeInTheDocument()
+    expect(screen.getByText("Show or hide the stats popup")).toBeInTheDocument()
+  })
+
+  it("selects a widget metric", async () => {
+    const onWidgetMetricChange = vi.fn()
+    render(
+      <SettingsPage
+        {...defaultProps}
+        availableMetrics={["Weekly", "Total usage"]}
+        onWidgetMetricChange={onWidgetMetricChange}
+      />
+    )
+    await openTab("Widget")
+    await userEvent.click(screen.getByRole("radio", { name: "Total usage" }))
+    expect(onWidgetMetricChange).toHaveBeenCalledWith("Total usage")
+  })
+
+  it("resets widget metric to auto", async () => {
+    const onWidgetMetricChange = vi.fn()
+    render(
+      <SettingsPage
+        {...defaultProps}
+        availableMetrics={["Weekly"]}
+        widgetMetric="Weekly"
+        onWidgetMetricChange={onWidgetMetricChange}
+      />
+    )
+    await openTab("Widget")
+    await userEvent.click(screen.getByRole("radio", { name: "Auto" }))
+    expect(onWidgetMetricChange).toHaveBeenCalledWith(null)
   })
 })

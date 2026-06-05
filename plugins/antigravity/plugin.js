@@ -1,6 +1,11 @@
 (function () {
   var LS_SERVICE = "exa.language_server_pb.LanguageServerService"
-  var STATE_DB = "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb"
+  function stateDbPath(ctx) {
+    if (ctx.app.platform === "windows") {
+      return "~/AppData/Roaming/Antigravity/User/globalStorage/state.vscdb"
+    }
+    return "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb"
+  }
   var CLOUD_CODE_URLS = [
     "https://daily-cloudcode-pa.googleapis.com",
     "https://cloudcode-pa.googleapis.com",
@@ -95,7 +100,7 @@
   function loadOAuthTokens(ctx) {
     try {
       var rows = ctx.host.sqlite.query(
-        STATE_DB,
+        stateDbPath(ctx),
         "SELECT value FROM ItemTable WHERE key = '" + OAUTH_TOKEN_KEY + "' LIMIT 1"
       )
       var parsed = ctx.util.tryParseJson(rows)

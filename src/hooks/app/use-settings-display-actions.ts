@@ -1,36 +1,39 @@
 import { useCallback } from "react"
+import { invoke, isTauri } from "@tauri-apps/api/core"
 import {
-  saveDisplayMode,
   saveMenubarIconStyle,
   saveResetTimerDisplayMode,
   saveThemeMode,
-  saveTimeFormatMode,
-  type DisplayMode,
+  saveWidgetLayout,
+  saveWidgetProviderIds,
   type MenubarIconStyle,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type TimeFormatMode,
+  type WidgetLayout,
+  type WidgetProviderIds,
 } from "@/lib/settings"
 
 type ScheduleTrayIconUpdate = (reason: "probe" | "settings" | "init", delayMs?: number) => void
 
 type UseSettingsDisplayActionsArgs = {
   setThemeMode: (value: ThemeMode) => void
-  setDisplayMode: (value: DisplayMode) => void
   resetTimerDisplayMode: ResetTimerDisplayMode
   setResetTimerDisplayMode: (value: ResetTimerDisplayMode) => void
-  setTimeFormatMode: (value: TimeFormatMode) => void
   setMenubarIconStyle: (value: MenubarIconStyle) => void
+  setWidgetLayout: (value: WidgetLayout) => void
+  setWidgetVisible: (value: boolean) => void
+  setWidgetProviderIds: (value: WidgetProviderIds) => void
   scheduleTrayIconUpdate: ScheduleTrayIconUpdate
 }
 
 export function useSettingsDisplayActions({
   setThemeMode,
-  setDisplayMode,
   resetTimerDisplayMode,
   setResetTimerDisplayMode,
-  setTimeFormatMode,
   setMenubarIconStyle,
+  setWidgetLayout,
+  setWidgetVisible,
+  setWidgetProviderIds,
   scheduleTrayIconUpdate,
 }: UseSettingsDisplayActionsArgs) {
   const handleThemeModeChange = useCallback((mode: ThemeMode) => {
@@ -39,14 +42,6 @@ export function useSettingsDisplayActions({
       console.error("Failed to save theme mode:", error)
     })
   }, [setThemeMode])
-
-  const handleDisplayModeChange = useCallback((mode: DisplayMode) => {
-    setDisplayMode(mode)
-    scheduleTrayIconUpdate("settings", 0)
-    void saveDisplayMode(mode).catch((error) => {
-      console.error("Failed to save display mode:", error)
-    })
-  }, [scheduleTrayIconUpdate, setDisplayMode])
 
   const handleResetTimerDisplayModeChange = useCallback((mode: ResetTimerDisplayMode) => {
     setResetTimerDisplayMode(mode)
@@ -60,13 +55,6 @@ export function useSettingsDisplayActions({
     handleResetTimerDisplayModeChange(next)
   }, [handleResetTimerDisplayModeChange, resetTimerDisplayMode])
 
-  const handleTimeFormatModeChange = useCallback((mode: TimeFormatMode) => {
-    setTimeFormatMode(mode)
-    void saveTimeFormatMode(mode).catch((error) => {
-      console.error("Failed to save time format mode:", error)
-    })
-  }, [setTimeFormatMode])
-
   const handleMenubarIconStyleChange = useCallback((style: MenubarIconStyle) => {
     setMenubarIconStyle(style)
     scheduleTrayIconUpdate("settings", 0)
@@ -75,12 +63,37 @@ export function useSettingsDisplayActions({
     })
   }, [scheduleTrayIconUpdate, setMenubarIconStyle])
 
+  const handleWidgetLayoutChange = useCallback((layout: WidgetLayout) => {
+    setWidgetLayout(layout)
+    // Widget window stays in sync via the shared store's onKeyChange listener.
+    void saveWidgetLayout(layout).catch((error) => {
+      console.error("Failed to save widget layout:", error)
+    })
+  }, [setWidgetLayout])
+
+  const handleWidgetVisibleChange = useCallback((visible: boolean) => {
+    setWidgetVisible(visible)
+    if (!isTauri()) return
+    // Rust persists widgetVisible and shows/hides the widget window.
+    void invoke("set_widget_visible", { visible }).catch((error) => {
+      console.error("Failed to set widget visibility:", error)
+    })
+  }, [setWidgetVisible])
+
+  const handleWidgetProviderIdsChange = useCallback((ids: WidgetProviderIds) => {
+    setWidgetProviderIds(ids)
+    void saveWidgetProviderIds(ids).catch((error) => {
+      console.error("Failed to save widget providers:", error)
+    })
+  }, [setWidgetProviderIds])
+
   return {
     handleThemeModeChange,
-    handleDisplayModeChange,
     handleResetTimerDisplayModeChange,
     handleResetTimerDisplayModeToggle,
-    handleTimeFormatModeChange,
     handleMenubarIconStyleChange,
+    handleWidgetLayoutChange,
+    handleWidgetVisibleChange,
+    handleWidgetProviderIdsChange,
   }
 }

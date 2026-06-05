@@ -9,16 +9,16 @@ import type { PluginMeta } from "@/lib/plugin-types"
 import {
   arePluginSettingsEqual,
   DEFAULT_AUTO_UPDATE_INTERVAL,
-  DEFAULT_DISPLAY_MODE,
   DEFAULT_GLOBAL_SHORTCUT,
   DEFAULT_MENUBAR_ICON_STYLE,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_THEME_MODE,
-  DEFAULT_TIME_FORMAT_MODE,
+  DEFAULT_WIDGET_LAYOUT,
+  DEFAULT_WIDGET_PROVIDER_IDS,
+  DEFAULT_WIDGET_VISIBLE,
   getEnabledPluginIds,
   loadAutoUpdateInterval,
-  loadDisplayMode,
   loadGlobalShortcut,
   loadMenubarIconStyle,
   migrateLegacyTraySettings,
@@ -26,17 +26,19 @@ import {
   loadResetTimerDisplayMode,
   loadStartOnLogin,
   loadThemeMode,
-  loadTimeFormatMode,
+  loadWidgetLayout,
+  loadWidgetProviderIds,
+  loadWidgetVisible,
   normalizePluginSettings,
   savePluginSettings,
   type AutoUpdateIntervalMinutes,
-  type DisplayMode,
   type GlobalShortcut,
   type MenubarIconStyle,
   type PluginSettings,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type TimeFormatMode,
+  type WidgetLayout,
+  type WidgetProviderIds,
 } from "@/lib/settings"
 
 type UseSettingsBootstrapArgs = {
@@ -44,12 +46,13 @@ type UseSettingsBootstrapArgs = {
   setPluginsMeta: (value: PluginMeta[]) => void
   setAutoUpdateInterval: (value: AutoUpdateIntervalMinutes) => void
   setThemeMode: (value: ThemeMode) => void
-  setDisplayMode: (value: DisplayMode) => void
   setResetTimerDisplayMode: (value: ResetTimerDisplayMode) => void
-  setTimeFormatMode: (value: TimeFormatMode) => void
   setGlobalShortcut: (value: GlobalShortcut) => void
   setStartOnLogin: (value: boolean) => void
   setMenubarIconStyle: (value: MenubarIconStyle) => void
+  setWidgetLayout: (value: WidgetLayout) => void
+  setWidgetVisible: (value: boolean) => void
+  setWidgetProviderIds: (value: WidgetProviderIds) => void
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
@@ -60,12 +63,13 @@ export function useSettingsBootstrap({
   setPluginsMeta,
   setAutoUpdateInterval,
   setThemeMode,
-  setDisplayMode,
   setResetTimerDisplayMode,
-  setTimeFormatMode,
   setGlobalShortcut,
   setStartOnLogin,
   setMenubarIconStyle,
+  setWidgetLayout,
+  setWidgetVisible,
+  setWidgetProviderIds,
   setLoadingForPlugins,
   setErrorForPlugins,
   startBatch,
@@ -112,25 +116,11 @@ export function useSettingsBootstrap({
           console.error("Failed to load theme mode:", error)
         }
 
-        let storedDisplayMode = DEFAULT_DISPLAY_MODE
-        try {
-          storedDisplayMode = await loadDisplayMode()
-        } catch (error) {
-          console.error("Failed to load display mode:", error)
-        }
-
         let storedResetTimerDisplayMode = DEFAULT_RESET_TIMER_DISPLAY_MODE
         try {
           storedResetTimerDisplayMode = await loadResetTimerDisplayMode()
         } catch (error) {
           console.error("Failed to load reset timer display mode:", error)
-        }
-
-        let storedTimeFormatMode = DEFAULT_TIME_FORMAT_MODE
-        try {
-          storedTimeFormatMode = await loadTimeFormatMode()
-        } catch (error) {
-          console.error("Failed to load time format mode:", error)
         }
 
         let storedGlobalShortcut = DEFAULT_GLOBAL_SHORTCUT
@@ -165,16 +155,38 @@ export function useSettingsBootstrap({
           console.error("Failed to load menubar icon style:", error)
         }
 
+        let storedWidgetLayout = DEFAULT_WIDGET_LAYOUT
+        try {
+          storedWidgetLayout = await loadWidgetLayout()
+        } catch (error) {
+          console.error("Failed to load widget layout:", error)
+        }
+
+        let storedWidgetVisible = DEFAULT_WIDGET_VISIBLE
+        try {
+          storedWidgetVisible = await loadWidgetVisible()
+        } catch (error) {
+          console.error("Failed to load widget visibility:", error)
+        }
+
+        let storedWidgetProviderIds = DEFAULT_WIDGET_PROVIDER_IDS
+        try {
+          storedWidgetProviderIds = await loadWidgetProviderIds()
+        } catch (error) {
+          console.error("Failed to load widget providers:", error)
+        }
+
         if (isMounted) {
           setPluginSettings(normalized)
           setAutoUpdateInterval(storedInterval)
           setThemeMode(storedThemeMode)
-          setDisplayMode(storedDisplayMode)
           setResetTimerDisplayMode(storedResetTimerDisplayMode)
-          setTimeFormatMode(storedTimeFormatMode)
           setGlobalShortcut(storedGlobalShortcut)
           setStartOnLogin(storedStartOnLogin)
           setMenubarIconStyle(storedMenubarIconStyle)
+          setWidgetLayout(storedWidgetLayout)
+          setWidgetVisible(storedWidgetVisible)
+          setWidgetProviderIds(storedWidgetProviderIds)
 
           const enabledIds = getEnabledPluginIds(normalized)
           setLoadingForPlugins(enabledIds)
@@ -200,7 +212,6 @@ export function useSettingsBootstrap({
   }, [
     applyStartOnLogin,
     setAutoUpdateInterval,
-    setDisplayMode,
     setErrorForPlugins,
     setGlobalShortcut,
     setLoadingForPlugins,
@@ -211,7 +222,9 @@ export function useSettingsBootstrap({
     setResetTimerDisplayMode,
     setStartOnLogin,
     setThemeMode,
-    setTimeFormatMode,
+    setWidgetLayout,
+    setWidgetVisible,
+    setWidgetProviderIds,
     startBatch,
   ])
 

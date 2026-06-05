@@ -23,24 +23,24 @@ vi.mock("@/hooks/use-changelog", () => ({
 }))
 
 describe("AboutDialog", () => {
-  it("renders version, links, and maintainers", () => {
+  it("renders version, fork note, and credits", () => {
     render(<AboutDialog version="1.2.3" onClose={() => {}} />)
-    expect(screen.getByText("OpenUsage")).toBeInTheDocument()
+    expect(screen.getByText("WinUsage")).toBeInTheDocument()
     expect(screen.getByText("v1.2.3")).toBeInTheDocument()
-    expect(screen.getByText("GitHub")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "validatedev" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "davidarny" })).toBeInTheDocument()
+    expect(screen.getByText(/Windows-focused fork of/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "OpenUsage" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Robin Ebers" })).toBeInTheDocument()
   })
 
-  it("opens maintainer GitHub profiles on click", async () => {
+  it("opens upstream project and author links on click", async () => {
     render(<AboutDialog version="1.2.3" onClose={() => {}} />)
 
-    await userEvent.click(screen.getByRole("button", { name: "validatedev" }))
-    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://github.com/validatedev")
+    await userEvent.click(screen.getByRole("button", { name: "OpenUsage" }))
+    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://github.com/robinebers/openusage")
 
     openerState.openUrlMock.mockClear()
-    await userEvent.click(screen.getByRole("button", { name: "davidarny" }))
-    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://github.com/davidarny")
+    await userEvent.click(screen.getByRole("button", { name: "Robin Ebers" }))
+    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://itsbyrob.in/x")
   })
 
   it("closes on Escape", async () => {
@@ -61,7 +61,7 @@ describe("AboutDialog", () => {
     await userEvent.keyboard("{Escape}")
 
     expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByText("OpenUsage")).toBeInTheDocument()
+    expect(screen.getByText("WinUsage")).toBeInTheDocument()
   })
 
   it("does not close on other keys", async () => {
@@ -80,7 +80,7 @@ describe("AboutDialog", () => {
 
     // Clicking inside the dialog should not close.
     onClose.mockClear()
-    await userEvent.click(screen.getByText("OpenUsage"))
+    await userEvent.click(screen.getByText("WinUsage"))
     expect(onClose).not.toHaveBeenCalled()
   })
 
@@ -89,7 +89,7 @@ describe("AboutDialog", () => {
     openerState.openUrlMock.mockImplementationOnce(() => Promise.reject(new Error("fail")))
 
     render(<AboutDialog version="1.2.3" onClose={() => {}} />)
-    await userEvent.click(screen.getByRole("button", { name: "GitHub" }))
+    await userEvent.click(screen.getByRole("button", { name: "OpenUsage" }))
 
     expect(openerState.openUrlMock).toHaveBeenCalled()
     // wait microtask for catch

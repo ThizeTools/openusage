@@ -11,12 +11,18 @@
     {
       marker: "windsurf",
       ideName: "windsurf",
-      stateDb: "~/Library/Application Support/Windsurf/User/globalStorage/state.vscdb",
+      stateDb: {
+        macos: "~/Library/Application Support/Windsurf/User/globalStorage/state.vscdb",
+        windows: "~/AppData/Roaming/Windsurf/User/globalStorage/state.vscdb",
+      },
     },
     {
       marker: "windsurf-next",
       ideName: "windsurf-next",
-      stateDb: "~/Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb",
+      stateDb: {
+        macos: "~/Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb",
+        windows: "~/AppData/Roaming/Windsurf - Next/User/globalStorage/state.vscdb",
+      },
     },
   ]
 
@@ -36,10 +42,15 @@
     return value
   }
 
+  function variantStateDb(ctx, variant) {
+    if (typeof variant.stateDb === "string") return variant.stateDb
+    return variant.stateDb[ctx.app.platform] || variant.stateDb.macos
+  }
+
   function loadApiKey(ctx, variant) {
     try {
       var rows = ctx.host.sqlite.query(
-        variant.stateDb,
+        variantStateDb(ctx, variant),
         "SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1"
       )
       var parsed = ctx.util.tryParseJson(rows)

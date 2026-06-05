@@ -85,6 +85,39 @@ describe("usePanel", () => {
     expect(setShowAbout).toHaveBeenCalledWith(true)
   })
 
+  it("navigates and dismisses About on tray navigate event", async () => {
+    const setActiveView = vi.fn()
+    const setShowAbout = vi.fn()
+    const callbacks = new Map<string, (event: { payload: unknown }) => void>()
+
+    listenMock.mockImplementation(async (event: string, callback: (event: { payload: unknown }) => void) => {
+      callbacks.set(event, callback)
+      return vi.fn()
+    })
+
+    renderHook(() =>
+      usePanel({
+        activeView: "claude",
+        setActiveView,
+        showAbout: true,
+        setShowAbout,
+        displayPlugins: [],
+      })
+    )
+
+    await waitFor(() => {
+      expect(listenMock).toHaveBeenCalledTimes(2)
+    })
+
+    act(() => {
+      callbacks.get("tray:navigate")?.({ payload: "home" })
+    })
+
+    expect(setActiveView).toHaveBeenCalledWith("home")
+    // Regression: reopening the panel must not restore a leftover About overlay.
+    expect(setShowAbout).toHaveBeenCalledWith(false)
+  })
+
   it("cleans first listener if hook unmounts before setup resolves", async () => {
     const unlistenNavigate = vi.fn()
     let resolveNavigate: ((value: () => void) => void) | null = null

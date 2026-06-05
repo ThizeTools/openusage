@@ -4,12 +4,14 @@ import { AppShell } from "@/components/app/app-shell"
 import { useAppPluginViews } from "@/hooks/app/use-app-plugin-views"
 import { useProbe } from "@/hooks/app/use-probe"
 import { useSettingsBootstrap } from "@/hooks/app/use-settings-bootstrap"
+import { useSettingsStoreSync } from "@/hooks/app/use-settings-store-sync"
 import { useSettingsDisplayActions } from "@/hooks/app/use-settings-display-actions"
 import { useSettingsPluginActions } from "@/hooks/app/use-settings-plugin-actions"
 import { useSettingsPluginList } from "@/hooks/app/use-settings-plugin-list"
 import { useSettingsSystemActions } from "@/hooks/app/use-settings-system-actions"
 import { useSettingsTheme } from "@/hooks/app/use-settings-theme"
 import { useTrayIcon } from "@/hooks/app/use-tray-icon"
+import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
 import { REFRESH_COOLDOWN_MS, savePluginSettings } from "@/lib/settings"
 import { type PluginContextAction } from "@/components/side-nav"
 import { useAppPluginStore } from "@/stores/app-plugin-store"
@@ -49,30 +51,28 @@ function App() {
     setAutoUpdateInterval,
     themeMode,
     setThemeMode,
-    displayMode,
-    setDisplayMode,
-    menubarIconStyle,
     setMenubarIconStyle,
     resetTimerDisplayMode,
     setResetTimerDisplayMode,
-    setTimeFormatMode,
     setGlobalShortcut,
     setStartOnLogin,
+    setWidgetLayout,
+    setWidgetVisible,
+    setWidgetProviderIds,
   } = useAppPreferencesStore(
     useShallow((state) => ({
       autoUpdateInterval: state.autoUpdateInterval,
       setAutoUpdateInterval: state.setAutoUpdateInterval,
       themeMode: state.themeMode,
       setThemeMode: state.setThemeMode,
-      displayMode: state.displayMode,
-      setDisplayMode: state.setDisplayMode,
-      menubarIconStyle: state.menubarIconStyle,
       setMenubarIconStyle: state.setMenubarIconStyle,
       resetTimerDisplayMode: state.resetTimerDisplayMode,
       setResetTimerDisplayMode: state.setResetTimerDisplayMode,
-      setTimeFormatMode: state.setTimeFormatMode,
       setGlobalShortcut: state.setGlobalShortcut,
       setStartOnLogin: state.setStartOnLogin,
+      setWidgetLayout: state.setWidgetLayout,
+      setWidgetVisible: state.setWidgetVisible,
+      setWidgetProviderIds: state.setWidgetProviderIds,
     }))
   )
 
@@ -96,13 +96,10 @@ function App() {
     onProbeResult: handleProbeResult,
   })
 
-  const { scheduleTrayIconUpdate, traySettingsPreview } = useTrayIcon({
+  const { scheduleTrayIconUpdate } = useTrayIcon({
     pluginsMeta,
     pluginSettings,
     pluginStates,
-    displayMode,
-    menubarIconStyle,
-    activeView,
   })
 
   useEffect(() => {
@@ -116,33 +113,45 @@ function App() {
     setPluginsMeta,
     setAutoUpdateInterval,
     setThemeMode,
-    setDisplayMode,
     setMenubarIconStyle,
     setResetTimerDisplayMode,
-    setTimeFormatMode,
     setGlobalShortcut,
     setStartOnLogin,
+    setWidgetLayout,
+    setWidgetVisible,
+    setWidgetProviderIds,
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
   })
 
   useSettingsTheme(themeMode)
+  useWidgetVisibilitySync(setWidgetVisible)
+  useSettingsStoreSync({
+    pluginsMeta,
+    setPluginSettings,
+    setMenubarIconStyle,
+    setThemeMode,
+    setResetTimerDisplayMode,
+    setAutoUpdateInterval,
+    scheduleTrayIconUpdate: scheduleTrayIconUpdate,
+  })
 
   const {
     handleThemeModeChange,
-    handleDisplayModeChange,
     handleResetTimerDisplayModeChange,
     handleResetTimerDisplayModeToggle,
-    handleTimeFormatModeChange,
-    handleMenubarIconStyleChange,
+    handleWidgetLayoutChange,
+    handleWidgetVisibleChange,
+    handleWidgetProviderIdsChange,
   } = useSettingsDisplayActions({
     setThemeMode,
-    setDisplayMode,
     resetTimerDisplayMode,
     setResetTimerDisplayMode,
-    setTimeFormatMode,
     setMenubarIconStyle,
+    setWidgetLayout,
+    setWidgetVisible,
+    setWidgetProviderIds,
     scheduleTrayIconUpdate,
   })
 
@@ -246,14 +255,13 @@ function App() {
         onToggle: handleToggle,
         onAutoUpdateIntervalChange: handleAutoUpdateIntervalChange,
         onThemeModeChange: handleThemeModeChange,
-        onDisplayModeChange: handleDisplayModeChange,
         onResetTimerDisplayModeChange: handleResetTimerDisplayModeChange,
         onResetTimerDisplayModeToggle: handleResetTimerDisplayModeToggle,
-        onTimeFormatModeChange: handleTimeFormatModeChange,
-        onMenubarIconStyleChange: handleMenubarIconStyleChange,
-        traySettingsPreview,
         onGlobalShortcutChange: handleGlobalShortcutChange,
         onStartOnLoginChange: handleStartOnLoginChange,
+        onWidgetLayoutChange: handleWidgetLayoutChange,
+        onWidgetVisibleChange: handleWidgetVisibleChange,
+        onWidgetProviderIdsChange: handleWidgetProviderIdsChange,
       }}
     />
   )

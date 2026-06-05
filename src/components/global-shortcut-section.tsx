@@ -145,11 +145,15 @@ function buildShortcutFromCodes(codes: Set<string>): { display: string; tauri: s
 interface GlobalShortcutSectionProps {
   globalShortcut: GlobalShortcut
   onGlobalShortcutChange: (value: GlobalShortcut) => void
+  title?: string
+  description?: string
 }
 
 export function GlobalShortcutSection({
   globalShortcut,
   onGlobalShortcutChange,
+  title = "Widget Shortcut",
+  description = "Show or hide the floating widget",
 }: GlobalShortcutSectionProps) {
   const [isRecording, setIsRecording] = useState(false)
   // Track pressed keys using event.code (physical key location)
@@ -243,9 +247,9 @@ export function GlobalShortcutSection({
 
   return (
     <section>
-      <h3 className="text-lg font-semibold mb-0">Global Shortcut</h3>
+      <h3 className="text-lg font-semibold mb-0">{title}</h3>
       <p className="text-sm text-muted-foreground mb-2">
-        Show panel from anywhere
+        {description}
       </p>
       <div className="space-y-2">
         {isRecording ? (

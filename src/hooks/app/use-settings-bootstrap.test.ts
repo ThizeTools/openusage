@@ -17,7 +17,9 @@ const {
   loadResetTimerDisplayModeMock,
   loadStartOnLoginMock,
   loadThemeModeMock,
-  loadTimeFormatModeMock,
+  loadWidgetLayoutMock,
+  loadWidgetProviderIdsMock,
+  loadWidgetVisibleMock,
   migrateLegacyTraySettingsMock,
   normalizePluginSettingsMock,
   savePluginSettingsMock,
@@ -37,7 +39,9 @@ const {
   loadResetTimerDisplayModeMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
   loadThemeModeMock: vi.fn(),
-  loadTimeFormatModeMock: vi.fn(),
+  loadWidgetLayoutMock: vi.fn(),
+  loadWidgetProviderIdsMock: vi.fn(),
+  loadWidgetVisibleMock: vi.fn(),
   migrateLegacyTraySettingsMock: vi.fn(),
   normalizePluginSettingsMock: vi.fn(),
   savePluginSettingsMock: vi.fn(),
@@ -63,7 +67,9 @@ vi.mock("@/lib/settings", () => ({
   DEFAULT_RESET_TIMER_DISPLAY_MODE: "relative",
   DEFAULT_START_ON_LOGIN: false,
   DEFAULT_THEME_MODE: "system",
-  DEFAULT_TIME_FORMAT_MODE: "auto",
+  DEFAULT_WIDGET_LAYOUT: "vertical",
+  DEFAULT_WIDGET_PROVIDER_IDS: null,
+  DEFAULT_WIDGET_VISIBLE: false,
   getEnabledPluginIds: getEnabledPluginIdsMock,
   loadAutoUpdateInterval: loadAutoUpdateIntervalMock,
   loadDisplayMode: loadDisplayModeMock,
@@ -73,7 +79,9 @@ vi.mock("@/lib/settings", () => ({
   loadResetTimerDisplayMode: loadResetTimerDisplayModeMock,
   loadStartOnLogin: loadStartOnLoginMock,
   loadThemeMode: loadThemeModeMock,
-  loadTimeFormatMode: loadTimeFormatModeMock,
+  loadWidgetLayout: loadWidgetLayoutMock,
+  loadWidgetProviderIds: loadWidgetProviderIdsMock,
+  loadWidgetVisible: loadWidgetVisibleMock,
   migrateLegacyTraySettings: migrateLegacyTraySettingsMock,
   normalizePluginSettings: normalizePluginSettingsMock,
   savePluginSettings: savePluginSettingsMock,
@@ -89,10 +97,12 @@ function createArgs() {
     setThemeMode: vi.fn(),
     setDisplayMode: vi.fn(),
     setResetTimerDisplayMode: vi.fn(),
-    setTimeFormatMode: vi.fn(),
     setGlobalShortcut: vi.fn(),
     setStartOnLogin: vi.fn(),
     setMenubarIconStyle: vi.fn(),
+    setWidgetLayout: vi.fn(),
+    setWidgetVisible: vi.fn(),
+    setWidgetProviderIds: vi.fn(),
     setLoadingForPlugins: vi.fn(),
     setErrorForPlugins: vi.fn(),
     startBatch: vi.fn().mockResolvedValue(undefined),
@@ -116,7 +126,9 @@ describe("useSettingsBootstrap", () => {
     loadResetTimerDisplayModeMock.mockReset()
     loadStartOnLoginMock.mockReset()
     loadThemeModeMock.mockReset()
-    loadTimeFormatModeMock.mockReset()
+    loadWidgetLayoutMock.mockReset()
+    loadWidgetProviderIdsMock.mockReset()
+    loadWidgetVisibleMock.mockReset()
     migrateLegacyTraySettingsMock.mockReset()
     normalizePluginSettingsMock.mockReset()
     savePluginSettingsMock.mockReset()
@@ -140,10 +152,12 @@ describe("useSettingsBootstrap", () => {
     loadThemeModeMock.mockResolvedValue("dark")
     loadDisplayModeMock.mockResolvedValue("used")
     loadResetTimerDisplayModeMock.mockResolvedValue("relative")
-    loadTimeFormatModeMock.mockResolvedValue("auto")
     loadGlobalShortcutMock.mockResolvedValue("CommandOrControl+Shift+O")
     loadMenubarIconStyleMock.mockResolvedValue("provider")
     loadStartOnLoginMock.mockResolvedValue(true)
+    loadWidgetLayoutMock.mockResolvedValue("vertical")
+    loadWidgetProviderIdsMock.mockResolvedValue(null)
+    loadWidgetVisibleMock.mockResolvedValue(false)
     migrateLegacyTraySettingsMock.mockResolvedValue(undefined)
     savePluginSettingsMock.mockResolvedValue(undefined)
     getEnabledPluginIdsMock.mockReturnValue(["codex"])

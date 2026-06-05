@@ -1,36 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   DEFAULT_AUTO_UPDATE_INTERVAL,
-  DEFAULT_DISPLAY_MODE,
   DEFAULT_GLOBAL_SHORTCUT,
   DEFAULT_MENUBAR_ICON_STYLE,
   DEFAULT_PLUGIN_SETTINGS,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_THEME_MODE,
-  DEFAULT_TIME_FORMAT_MODE,
+  DEFAULT_WIDGET_LAYOUT,
+  DEFAULT_WIDGET_PROVIDER_IDS,
+  DEFAULT_WIDGET_VISIBLE,
   arePluginSettingsEqual,
   getEnabledPluginIds,
   loadAutoUpdateInterval,
-  loadDisplayMode,
   loadGlobalShortcut,
   loadMenubarIconStyle,
   loadPluginSettings,
   loadResetTimerDisplayMode,
   loadStartOnLogin,
-  loadTimeFormatMode,
+  loadWidgetLayout,
+  loadWidgetPosition,
+  loadWidgetProviderIds,
+  loadWidgetVisible,
   migrateLegacyTraySettings,
   loadThemeMode,
   normalizePluginSettings,
   saveAutoUpdateInterval,
-  saveDisplayMode,
   saveGlobalShortcut,
   saveMenubarIconStyle,
   savePluginSettings,
   saveResetTimerDisplayMode,
   saveStartOnLogin,
   saveThemeMode,
-  saveTimeFormatMode,
+  saveWidgetLayout,
+  saveWidgetPosition,
+  saveWidgetProviderIds,
+  saveWidgetVisible,
 } from "@/lib/settings"
 import type { PluginMeta } from "@/lib/plugin-types"
 
@@ -150,25 +155,6 @@ describe("settings", () => {
     await expect(loadThemeMode()).resolves.toBe(DEFAULT_THEME_MODE)
   })
 
-  it("loads default display mode when missing", async () => {
-    await expect(loadDisplayMode()).resolves.toBe(DEFAULT_DISPLAY_MODE)
-  })
-
-  it("loads stored display mode", async () => {
-    storeState.set("displayMode", "left")
-    await expect(loadDisplayMode()).resolves.toBe("left")
-  })
-
-  it("saves display mode", async () => {
-    await saveDisplayMode("left")
-    await expect(loadDisplayMode()).resolves.toBe("left")
-  })
-
-  it("falls back to default for invalid display mode", async () => {
-    storeState.set("displayMode", "invalid")
-    await expect(loadDisplayMode()).resolves.toBe(DEFAULT_DISPLAY_MODE)
-  })
-
   it("loads default reset timer display mode when missing", async () => {
     await expect(loadResetTimerDisplayMode()).resolves.toBe(DEFAULT_RESET_TIMER_DISPLAY_MODE)
   })
@@ -186,25 +172,6 @@ describe("settings", () => {
   it("falls back to default for invalid reset timer display mode", async () => {
     storeState.set("resetTimerDisplayMode", "invalid")
     await expect(loadResetTimerDisplayMode()).resolves.toBe(DEFAULT_RESET_TIMER_DISPLAY_MODE)
-  })
-
-  it("loads default time format mode when missing", async () => {
-    await expect(loadTimeFormatMode()).resolves.toBe(DEFAULT_TIME_FORMAT_MODE)
-  })
-
-  it("loads stored time format mode", async () => {
-    storeState.set("timeFormatMode", "24h")
-    await expect(loadTimeFormatMode()).resolves.toBe("24h")
-  })
-
-  it("saves time format mode", async () => {
-    await saveTimeFormatMode("12h")
-    await expect(loadTimeFormatMode()).resolves.toBe("12h")
-  })
-
-  it("falls back to default for invalid time format mode", async () => {
-    storeState.set("timeFormatMode", "invalid")
-    await expect(loadTimeFormatMode()).resolves.toBe(DEFAULT_TIME_FORMAT_MODE)
   })
 
   it("migrates and removes legacy tray settings keys", async () => {
@@ -360,5 +327,63 @@ describe("settings", () => {
   it("falls back to default for invalid start on login value", async () => {
     storeState.set("startOnLogin", "invalid")
     await expect(loadStartOnLogin()).resolves.toBe(DEFAULT_START_ON_LOGIN)
+  })
+
+  it("loads default widget layout when missing", async () => {
+    await expect(loadWidgetLayout()).resolves.toBe(DEFAULT_WIDGET_LAYOUT)
+  })
+
+  it("loads and saves widget layout", async () => {
+    await saveWidgetLayout("horizontal")
+    await expect(loadWidgetLayout()).resolves.toBe("horizontal")
+  })
+
+  it("falls back to default for invalid widget layout", async () => {
+    storeState.set("widgetLayout", "diagonal")
+    await expect(loadWidgetLayout()).resolves.toBe(DEFAULT_WIDGET_LAYOUT)
+  })
+
+  it("loads default widget visibility when missing", async () => {
+    await expect(loadWidgetVisible()).resolves.toBe(DEFAULT_WIDGET_VISIBLE)
+  })
+
+  it("loads and saves widget visibility", async () => {
+    await saveWidgetVisible(true)
+    await expect(loadWidgetVisible()).resolves.toBe(true)
+  })
+
+  it("falls back to default for invalid widget visibility", async () => {
+    storeState.set("widgetVisible", "yes")
+    await expect(loadWidgetVisible()).resolves.toBe(DEFAULT_WIDGET_VISIBLE)
+  })
+
+  it("returns null widget position when missing or invalid", async () => {
+    await expect(loadWidgetPosition()).resolves.toBeNull()
+    storeState.set("widgetPosition", { x: "a", y: 1 })
+    await expect(loadWidgetPosition()).resolves.toBeNull()
+  })
+
+  it("loads and saves widget position", async () => {
+    await saveWidgetPosition({ x: 12, y: 34 })
+    await expect(loadWidgetPosition()).resolves.toEqual({ x: 12, y: 34 })
+  })
+
+  it("loads default widget provider ids when missing", async () => {
+    await expect(loadWidgetProviderIds()).resolves.toBe(DEFAULT_WIDGET_PROVIDER_IDS)
+  })
+
+  it("loads and saves widget provider ids", async () => {
+    await saveWidgetProviderIds(["claude", "codex"])
+    await expect(loadWidgetProviderIds()).resolves.toEqual(["claude", "codex"])
+  })
+
+  it("allows an empty widget provider list", async () => {
+    await saveWidgetProviderIds([])
+    await expect(loadWidgetProviderIds()).resolves.toEqual([])
+  })
+
+  it("falls back to default for invalid widget provider ids", async () => {
+    storeState.set("widgetProviderIds", [1, "codex"])
+    await expect(loadWidgetProviderIds()).resolves.toBe(DEFAULT_WIDGET_PROVIDER_IDS)
   })
 })

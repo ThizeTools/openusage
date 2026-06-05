@@ -7,9 +7,15 @@ import type { SettingsPluginState } from "@/hooks/app/use-settings-plugin-list"
 import { useAppVersion } from "@/hooks/app/use-app-version"
 import { usePanel } from "@/hooks/app/use-panel"
 import { useAppUpdate } from "@/hooks/use-app-update"
+import { cn } from "@/lib/utils"
 import { useAppUiStore } from "@/stores/app-ui-store"
 
 const ARROW_OVERHEAD_PX = 37
+
+function isWindowsPlatform() {
+  if (typeof navigator === "undefined") return false
+  return /Win/.test(navigator.platform)
+}
 
 type AppShellProps = {
   onRefreshAll: () => void
@@ -65,17 +71,25 @@ export function AppShell({
 
   const appVersion = useAppVersion()
   const { updateStatus, triggerInstall, checkForUpdates } = useAppUpdate()
+  const isWindows = isWindowsPlatform()
+  const panelHeightOverheadPx = isWindows ? 0 : ARROW_OVERHEAD_PX
 
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
-      className="flex flex-col items-center p-6 pt-1.5 bg-transparent outline-none"
+      className={cn(
+        "flex flex-col items-center bg-transparent outline-none",
+        isWindows ? "p-0" : "p-6 pt-1.5"
+      )}
     >
-      <div className="tray-arrow" />
+      {!isWindows && <div className="tray-arrow" data-tauri-drag-region />}
       <div
-        className="relative bg-card rounded-xl overflow-hidden select-none w-full border shadow-lg flex flex-col"
-        style={maxPanelHeightPx ? { maxHeight: `${maxPanelHeightPx - ARROW_OVERHEAD_PX}px` } : undefined}
+        className={cn(
+          "relative bg-card rounded-xl overflow-hidden select-none w-full border flex flex-col",
+          isWindows ? "shadow-none" : "shadow-lg"
+        )}
+        style={maxPanelHeightPx ? { maxHeight: `${maxPanelHeightPx - panelHeightOverheadPx}px` } : undefined}
       >
         <div className="flex flex-1 min-h-0 flex-row">
           <SideNav

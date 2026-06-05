@@ -50,7 +50,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Test"
-        displayMode="used"
         error="Nope"
         onRetry={onRetry}
       />
@@ -64,7 +63,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Test"
-        displayMode="used"
         loading
         skeletonLines={[
           { type: "text", label: "One", scope: "overview" },
@@ -80,7 +78,6 @@ describe("ProviderCard", () => {
     const { container } = render(
       <ProviderCard
         name="Loading"
-        displayMode="used"
         loading
         onRetry={() => {}}
       />
@@ -92,7 +89,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Metrics"
-        displayMode="used"
         lines={[
           { type: "text", label: "Label", value: "Value" },
           { type: "badge", label: "Plan", text: "Pro" },
@@ -105,16 +101,15 @@ describe("ProviderCard", () => {
     )
     expect(screen.getByText("Label")).toBeInTheDocument()
     expect(screen.getByText("Pro")).toBeInTheDocument()
-    expect(screen.getByText("32%")).toBeInTheDocument()
-    expect(screen.getByText("$12.34")).toBeInTheDocument()
-    expect(screen.getByText("342 credits")).toBeInTheDocument()
+    expect(screen.getByText("Used 32% · Left 68%")).toBeInTheDocument()
+    expect(screen.getByText("Used $12.34 · Left $87.66")).toBeInTheDocument()
+    expect(screen.getByText("Used 342 credits · Left 658 credits")).toBeInTheDocument()
   })
 
   it("renders quick links and opens URL", async () => {
     render(
       <ProviderCard
         name="Links"
-        displayMode="used"
         links={[
           { label: "Status", url: "https://status.example.com" },
           { label: "Billing", url: "https://example.com/billing" },
@@ -131,7 +126,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Links"
-        displayMode="used"
         links={[
           { label: " ", url: "https://status.example.com" },
           { label: "Dashboard", url: "ftp://example.com" },
@@ -152,7 +146,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Cooldown"
-        displayMode="used"
         lastManualRefreshAt={lastManualRefreshAt}
         onRetry={() => {}}
       />
@@ -168,7 +161,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Cooldown"
-        displayMode="used"
         lastManualRefreshAt={lastManualRefreshAt}
         onRetry={() => {}}
       />
@@ -188,28 +180,76 @@ describe("ProviderCard", () => {
     expect(formatFixedPrecisionNumber(1234567.89)).toBe("1,234,567.89")
   })
 
-  it("supports displayMode=left for percent (number + bar fill)", () => {
+  it("fills the bar with the used fraction", () => {
     render(
       <ProviderCard
-        name="Left"
-        displayMode="left"
+        name="Used"
         lines={[
           { type: "progress", label: "Session", used: 42, limit: 100, format: { kind: "percent" } },
         ]}
       />
     )
-    expect(screen.getByText("58% left")).toBeInTheDocument()
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "58")
+    expect(screen.getByText("Used 42% · Left 58%")).toBeInTheDocument()
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42")
   })
 
-  it("uses elapsed-time marker position in displayMode=left", () => {
+  it("shows drift and expected metrics for reset-aware lines", () => {
+    vi.useFakeTimers()
+    const now = new Date("2026-02-02T12:00:00.000Z")
+    vi.setSystemTime(now)
+    render(
+      <ProviderCard
+        name="Drift"
+        lines={[
+          {
+            type: "progress",
+            label: "Daily",
+            used: 60,
+            limit: 100,
+            format: { kind: "percent" },
+            resetsAt: "2026-02-03T00:00:00.000Z",
+            periodDurationMs: 24 * 60 * 60 * 1000,
+          },
+        ]}
+      />
+    )
+    // Half the period elapsed → expected 50%, drift +10%.
+    expect(screen.getByText("Used 60% · Left 40% · Drift +10% · Expected 50%")).toBeInTheDocument()
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "60")
+    vi.useRealTimers()
+  })
+
+  it("shows negative drift when under the expected pace", () => {
+    vi.useFakeTimers()
+    const now = new Date("2026-02-02T12:00:00.000Z")
+    vi.setSystemTime(now)
+    render(
+      <ProviderCard
+        name="Under"
+        lines={[
+          {
+            type: "progress",
+            label: "Daily",
+            used: 30,
+            limit: 100,
+            format: { kind: "percent" },
+            resetsAt: "2026-02-03T00:00:00.000Z",
+            periodDurationMs: 24 * 60 * 60 * 1000,
+          },
+        ]}
+      />
+    )
+    expect(screen.getByText("Used 30% · Left 70% · Drift -20% · Expected 50%")).toBeInTheDocument()
+    vi.useRealTimers()
+  })
+
+  it("positions the expected marker at the elapsed fraction", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T18:00:00.000Z")
     vi.setSystemTime(now)
     render(
       <ProviderCard
-        name="Left Pace"
-        displayMode="left"
+        name="Marker"
         lines={[
           {
             type: "progress",
@@ -225,7 +265,7 @@ describe("ProviderCard", () => {
     )
     const marker = document.querySelector<HTMLElement>('[data-slot="progress-marker"]')
     expect(marker).toBeTruthy()
-    expect(marker?.style.left).toBe("25%")
+    expect(marker?.style.left).toBe("75%")
     vi.useRealTimers()
   })
 
@@ -236,7 +276,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -266,7 +305,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -291,7 +329,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -315,7 +352,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -339,7 +375,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -363,7 +398,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         resetTimerDisplayMode="absolute"
         lines={[
           {
@@ -390,7 +424,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         resetTimerDisplayMode="absolute"
         onResetTimerDisplayModeToggle={onToggle}
         lines={[
@@ -429,7 +462,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         resetTimerDisplayMode="absolute"
         lines={[
           {
@@ -456,7 +488,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         resetTimerDisplayMode="absolute"
         lines={[
           {
@@ -485,7 +516,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Resets"
-        displayMode="used"
         resetTimerDisplayMode="absolute"
         lines={[
           {
@@ -512,7 +542,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Pace"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -551,13 +580,13 @@ describe("ProviderCard", () => {
     expect(screen.getByText("90% used at reset")).toBeInTheDocument()
     expect(screen.getByText("Limit in 8h 0m")).toBeInTheDocument()
 
-    // On-track hides the marker (like CodexBar); only ahead + behind show it
+    // Expected marker is always visible when the period is known.
     const markers = document.querySelectorAll<HTMLElement>('[data-slot="progress-marker"]')
-    expect(markers).toHaveLength(2)
-    expect(markers[0]?.style.left).toBe("50%")
-    expect(markers[1]?.style.left).toBe("50%")
-    expect(markers[0]).toHaveClass("bg-muted-foreground")
-    expect(markers[1]).toHaveClass("bg-muted-foreground")
+    expect(markers).toHaveLength(3)
+    for (const marker of markers) {
+      expect(marker.style.left).toBe("50%")
+      expect(marker).toHaveClass("bg-muted-foreground")
+    }
     vi.useRealTimers()
   })
 
@@ -568,7 +597,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Pace"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -596,7 +624,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Pace"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -625,7 +652,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Pace"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -644,14 +670,13 @@ describe("ProviderCard", () => {
     vi.useRealTimers()
   })
 
-  it("hides marker when pace is unavailable early in period", () => {
+  it("keeps the expected marker even when pace is unavailable early in period", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T00:45:00.000Z")
     vi.setSystemTime(now)
     render(
       <ProviderCard
         name="Pace"
-        displayMode="used"
         lines={[
           {
             type: "progress",
@@ -665,8 +690,11 @@ describe("ProviderCard", () => {
         ]}
       />
     )
+    // Pace dot needs ≥5% of the period, but the expected marker always shows.
     expect(screen.queryByLabelText("Plenty of room")).not.toBeInTheDocument()
-    expect(document.querySelector('[data-slot="progress-marker"]')).toBeNull()
+    const marker = document.querySelector<HTMLElement>('[data-slot="progress-marker"]')
+    expect(marker).toBeTruthy()
+    expect(marker?.style.left).toBe("3.125%")
     vi.useRealTimers()
   })
 
@@ -675,7 +703,6 @@ describe("ProviderCard", () => {
     const { container } = render(
       <ProviderCard
         name="Retry"
-        displayMode="used"
         onRetry={onRetry}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
@@ -699,7 +726,6 @@ describe("ProviderCard", () => {
     const { container } = render(
       <ProviderCard
         name="Retry"
-        displayMode="used"
         onRetry={onRetry}
         lastManualRefreshAt={lastManualRefreshAt}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
@@ -723,7 +749,6 @@ describe("ProviderCard", () => {
     const { unmount } = render(
       <ProviderCard
         name="Cooldown"
-        displayMode="used"
         lastManualRefreshAt={lastManualRefreshAt}
         onRetry={() => {}}
       />
@@ -740,7 +765,6 @@ describe("ProviderCard", () => {
     const { container } = render(
       <ProviderCard
         name="NoSep"
-        displayMode="used"
         showSeparator={false}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
@@ -752,7 +776,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Filtered"
-        displayMode="used"
         scopeFilter="overview"
         skeletonLines={[
           { type: "text", label: "Primary", scope: "overview" },
@@ -774,7 +797,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="All"
-        displayMode="used"
         scopeFilter="all"
         skeletonLines={[
           { type: "text", label: "Primary", scope: "overview" },
@@ -796,7 +818,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Loading"
-        displayMode="used"
         loading
         scopeFilter="overview"
         skeletonLines={[
@@ -813,7 +834,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="SWR"
-        displayMode="used"
         loading
         lastUpdatedAt={Date.now() - 60_000}
         lines={[
@@ -828,7 +848,7 @@ describe("ProviderCard", () => {
     )
     // Real data stays on screen — no skeleton swap
     expect(screen.getByText("Value")).toBeInTheDocument()
-    expect(screen.getByText("32%")).toBeInTheDocument()
+    expect(screen.getByText("Used 32% · Left 68%")).toBeInTheDocument()
     // Progress bar shows shimmer overlay
     expect(document.querySelector('[data-slot="progress-refreshing"]')).toBeTruthy()
   })
@@ -837,7 +857,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="FilteredEmpty"
-        displayMode="used"
         loading
         lastUpdatedAt={Date.now() - 60_000}
         scopeFilter="overview"
@@ -859,7 +878,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Cold"
-        displayMode="used"
         loading
         skeletonLines={[{ type: "progress", label: "Session", scope: "overview" }]}
       />
@@ -872,7 +890,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="StaleErr"
-        displayMode="used"
         error="Couldn't update data. Try again?"
         lastUpdatedAt={Date.now() - 60_000}
         lines={[
@@ -881,7 +898,7 @@ describe("ProviderCard", () => {
       />
     )
     // Stale data still visible
-    expect(screen.getByText("40%")).toBeInTheDocument()
+    expect(screen.getByText("Used 40% · Left 60%")).toBeInTheDocument()
     // Inline warning shown (not the full PluginError alert) — error text appears
     // in both the trigger and the tooltip content via our mocked Tooltip
     expect(screen.getAllByText("Couldn't update data. Try again?").length).toBeGreaterThan(0)
@@ -892,7 +909,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="ColdErr"
-        displayMode="used"
         error="Nope"
         onRetry={() => {}}
       />
@@ -908,7 +924,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Updated"
-        displayMode="used"
         onRetry={() => {}}
         lastUpdatedAt={now.getTime() - 120_000}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
@@ -925,7 +940,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Fresh"
-        displayMode="used"
         onRetry={() => {}}
         lastUpdatedAt={now.getTime() - 5_000}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
@@ -942,7 +956,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="Skew"
-        displayMode="used"
         onRetry={() => {}}
         lastUpdatedAt={now.getTime() + 60_000}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
@@ -956,7 +969,6 @@ describe("ProviderCard", () => {
     render(
       <ProviderCard
         name="NoTimestamp"
-        displayMode="used"
         onRetry={() => {}}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />

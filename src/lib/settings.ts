@@ -10,17 +10,22 @@ export type PluginSettings = {
   disabled: string[];
 };
 
-export type AutoUpdateIntervalMinutes = 5 | 15 | 30 | 60;
+export type AutoUpdateIntervalMinutes = 1 | 5 | 15 | 30;
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export type DisplayMode = "used" | "left";
-
 export type ResetTimerDisplayMode = "relative" | "absolute";
 
-export type TimeFormatMode = "auto" | "12h" | "24h";
-
 export type MenubarIconStyle = "provider" | "bars" | "donut";
+
+export type WidgetLayout = "vertical" | "horizontal";
+
+export type WidgetPosition = { x: number; y: number };
+
+export type WidgetProviderIds = string[] | null;
+
+/** Selected metric label shown in the widget; null = auto (weekly/total like the tray). */
+export type WidgetMetric = string | null;
 
 export type GlobalShortcut = string | null;
 
@@ -28,30 +33,41 @@ const SETTINGS_STORE_PATH = "settings.json";
 const PLUGIN_SETTINGS_KEY = "plugins";
 const AUTO_UPDATE_SETTINGS_KEY = "autoUpdateInterval";
 const THEME_MODE_KEY = "themeMode";
-const DISPLAY_MODE_KEY = "displayMode";
 const RESET_TIMER_DISPLAY_MODE_KEY = "resetTimerDisplayMode";
-const TIME_FORMAT_MODE_KEY = "timeFormatMode";
 const MENUBAR_ICON_STYLE_KEY = "menubarIconStyle";
 const LEGACY_TRAY_ICON_STYLE_KEY = "trayIconStyle";
 const LEGACY_TRAY_SHOW_PERCENTAGE_KEY = "trayShowPercentage";
 const GLOBAL_SHORTCUT_KEY = "globalShortcut";
+const STATS_SHORTCUT_KEY = "statsShortcut";
 const START_ON_LOGIN_KEY = "startOnLogin";
+const WIDGET_LAYOUT_KEY = "widgetLayout";
+const WIDGET_VISIBLE_KEY = "widgetVisible";
+const WIDGET_POSITION_KEY = "widgetPosition";
+const WIDGET_PROVIDER_IDS_KEY = "widgetProviderIds";
+const WIDGET_METRIC_KEY = "widgetMetric";
 
 export const DEFAULT_AUTO_UPDATE_INTERVAL: AutoUpdateIntervalMinutes = 15;
 export const DEFAULT_THEME_MODE: ThemeMode = "system";
-export const DEFAULT_DISPLAY_MODE: DisplayMode = "left";
 export const DEFAULT_RESET_TIMER_DISPLAY_MODE: ResetTimerDisplayMode = "relative";
-export const DEFAULT_TIME_FORMAT_MODE: TimeFormatMode = "auto";
 export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = "provider";
 export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = null;
+export const DEFAULT_STATS_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_START_ON_LOGIN = false;
+export const DEFAULT_WIDGET_LAYOUT: WidgetLayout = "vertical";
+export const DEFAULT_WIDGET_VISIBLE = false;
+export const DEFAULT_WIDGET_PROVIDER_IDS: WidgetProviderIds = null;
+export const DEFAULT_WIDGET_METRIC: WidgetMetric = null;
 
-const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [5, 15, 30, 60];
+const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [1, 5, 15, 30];
 const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
-const DISPLAY_MODES: DisplayMode[] = ["used", "left"];
 const RESET_TIMER_DISPLAY_MODES: ResetTimerDisplayMode[] = ["relative", "absolute"];
-const TIME_FORMAT_MODES: TimeFormatMode[] = ["auto", "12h", "24h"];
 const MENUBAR_ICON_STYLES: MenubarIconStyle[] = ["provider", "donut", "bars"];
+const WIDGET_LAYOUTS: WidgetLayout[] = ["vertical", "horizontal"];
+
+export const WIDGET_LAYOUT_OPTIONS: { value: WidgetLayout; label: string }[] = [
+  { value: "vertical", label: "Vertical" },
+  { value: "horizontal", label: "Horizontal" },
+];
 
 export const MENUBAR_ICON_STYLE_OPTIONS: { value: MenubarIconStyle; label: string }[] = [
   { value: "provider", label: "Plugin" },
@@ -62,7 +78,7 @@ export const MENUBAR_ICON_STYLE_OPTIONS: { value: MenubarIconStyle; label: strin
 export const AUTO_UPDATE_OPTIONS: { value: AutoUpdateIntervalMinutes; label: string }[] =
   AUTO_UPDATE_INTERVALS.map((value) => ({
     value,
-    label: value === 60 ? "1 hour" : `${value} min`,
+    label: `${value} min`,
   }));
 
 export const THEME_OPTIONS: { value: ThemeMode; label: string }[] =
@@ -71,20 +87,9 @@ export const THEME_OPTIONS: { value: ThemeMode; label: string }[] =
     label: value.charAt(0).toUpperCase() + value.slice(1),
   }));
 
-export const DISPLAY_MODE_OPTIONS: { value: DisplayMode; label: string }[] = [
-  { value: "left", label: "Left" },
-  { value: "used", label: "Used" },
-];
-
 export const RESET_TIMER_DISPLAY_OPTIONS: { value: ResetTimerDisplayMode; label: string }[] = [
   { value: "relative", label: "Relative" },
   { value: "absolute", label: "Absolute" },
-];
-
-export const TIME_FORMAT_OPTIONS: { value: TimeFormatMode; label: string }[] = [
-  { value: "auto", label: "Auto" },
-  { value: "12h", label: "12-hour" },
-  { value: "24h", label: "24-hour" },
 ];
 
 const store = new LazyStore(SETTINGS_STORE_PATH);
@@ -192,21 +197,6 @@ export async function saveThemeMode(mode: ThemeMode): Promise<void> {
   await store.save();
 }
 
-function isDisplayMode(value: unknown): value is DisplayMode {
-  return typeof value === "string" && DISPLAY_MODES.includes(value as DisplayMode);
-}
-
-export async function loadDisplayMode(): Promise<DisplayMode> {
-  const stored = await store.get<unknown>(DISPLAY_MODE_KEY);
-  if (isDisplayMode(stored)) return stored;
-  return DEFAULT_DISPLAY_MODE;
-}
-
-export async function saveDisplayMode(mode: DisplayMode): Promise<void> {
-  await store.set(DISPLAY_MODE_KEY, mode);
-  await store.save();
-}
-
 function isResetTimerDisplayMode(value: unknown): value is ResetTimerDisplayMode {
   return (
     typeof value === "string" &&
@@ -222,24 +212,6 @@ export async function loadResetTimerDisplayMode(): Promise<ResetTimerDisplayMode
 
 export async function saveResetTimerDisplayMode(mode: ResetTimerDisplayMode): Promise<void> {
   await store.set(RESET_TIMER_DISPLAY_MODE_KEY, mode);
-  await store.save();
-}
-
-function isTimeFormatMode(value: unknown): value is TimeFormatMode {
-  return (
-    typeof value === "string" &&
-    TIME_FORMAT_MODES.includes(value as TimeFormatMode)
-  );
-}
-
-export async function loadTimeFormatMode(): Promise<TimeFormatMode> {
-  const stored = await store.get<unknown>(TIME_FORMAT_MODE_KEY);
-  if (isTimeFormatMode(stored)) return stored;
-  return DEFAULT_TIME_FORMAT_MODE;
-}
-
-export async function saveTimeFormatMode(mode: TimeFormatMode): Promise<void> {
-  await store.set(TIME_FORMAT_MODE_KEY, mode);
   await store.save();
 }
 
@@ -322,6 +294,17 @@ export async function saveGlobalShortcut(shortcut: GlobalShortcut): Promise<void
   await store.save();
 }
 
+export async function loadStatsShortcut(): Promise<GlobalShortcut> {
+  const stored = await store.get<unknown>(STATS_SHORTCUT_KEY);
+  if (isGlobalShortcut(stored)) return stored;
+  return DEFAULT_STATS_SHORTCUT;
+}
+
+export async function saveStatsShortcut(shortcut: GlobalShortcut): Promise<void> {
+  await store.set(STATS_SHORTCUT_KEY, shortcut);
+  await store.save();
+}
+
 export async function loadStartOnLogin(): Promise<boolean> {
   const stored = await store.get<unknown>(START_ON_LOGIN_KEY);
   if (typeof stored === "boolean") return stored;
@@ -330,5 +313,84 @@ export async function loadStartOnLogin(): Promise<boolean> {
 
 export async function saveStartOnLogin(value: boolean): Promise<void> {
   await store.set(START_ON_LOGIN_KEY, value);
+  await store.save();
+}
+
+function isWidgetLayout(value: unknown): value is WidgetLayout {
+  return typeof value === "string" && WIDGET_LAYOUTS.includes(value as WidgetLayout);
+}
+
+export async function loadWidgetLayout(): Promise<WidgetLayout> {
+  const stored = await store.get<unknown>(WIDGET_LAYOUT_KEY);
+  if (isWidgetLayout(stored)) return stored;
+  return DEFAULT_WIDGET_LAYOUT;
+}
+
+export async function saveWidgetLayout(layout: WidgetLayout): Promise<void> {
+  await store.set(WIDGET_LAYOUT_KEY, layout);
+  await store.save();
+}
+
+export async function loadWidgetVisible(): Promise<boolean> {
+  const stored = await store.get<unknown>(WIDGET_VISIBLE_KEY);
+  if (typeof stored === "boolean") return stored;
+  return DEFAULT_WIDGET_VISIBLE;
+}
+
+export async function saveWidgetVisible(value: boolean): Promise<void> {
+  await store.set(WIDGET_VISIBLE_KEY, value);
+  await store.save();
+}
+
+function isWidgetPosition(value: unknown): value is WidgetPosition {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as WidgetPosition).x === "number" &&
+    typeof (value as WidgetPosition).y === "number" &&
+    Number.isFinite((value as WidgetPosition).x) &&
+    Number.isFinite((value as WidgetPosition).y)
+  );
+}
+
+export async function loadWidgetPosition(): Promise<WidgetPosition | null> {
+  const stored = await store.get<unknown>(WIDGET_POSITION_KEY);
+  if (isWidgetPosition(stored)) return stored;
+  return null;
+}
+
+export async function saveWidgetPosition(position: WidgetPosition): Promise<void> {
+  await store.set(WIDGET_POSITION_KEY, position);
+  await store.save();
+}
+
+function isWidgetProviderIds(value: unknown): value is WidgetProviderIds {
+  if (value === null) return true;
+  return Array.isArray(value) && value.every((id) => typeof id === "string");
+}
+
+export async function loadWidgetProviderIds(): Promise<WidgetProviderIds> {
+  const stored = await store.get<unknown>(WIDGET_PROVIDER_IDS_KEY);
+  if (isWidgetProviderIds(stored)) return stored;
+  return DEFAULT_WIDGET_PROVIDER_IDS;
+}
+
+export async function saveWidgetProviderIds(ids: WidgetProviderIds): Promise<void> {
+  await store.set(WIDGET_PROVIDER_IDS_KEY, ids);
+  await store.save();
+}
+
+function isWidgetMetric(value: unknown): value is WidgetMetric {
+  return value === null || typeof value === "string";
+}
+
+export async function loadWidgetMetric(): Promise<WidgetMetric> {
+  const stored = await store.get<unknown>(WIDGET_METRIC_KEY);
+  if (isWidgetMetric(stored)) return stored;
+  return DEFAULT_WIDGET_METRIC;
+}
+
+export async function saveWidgetMetric(metric: WidgetMetric): Promise<void> {
+  await store.set(WIDGET_METRIC_KEY, metric);
   await store.save();
 }

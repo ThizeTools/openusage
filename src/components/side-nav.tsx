@@ -1,6 +1,5 @@
 import { useCallback } from "react"
-import { CircleHelp, Settings } from "lucide-react"
-import { openUrl } from "@tauri-apps/plugin-opener"
+import { Settings } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu"
 import {
@@ -216,61 +215,48 @@ export function SideNav({
 
   return (
     <nav className="flex flex-col w-12 border-r bg-muted/50 dark:bg-card py-3">
-      {/* Home */}
-      <NavButton
-        isActive={activeView === "home"}
-        onClick={() => onViewChange("home")}
-        aria-label="Home"
-      >
-        <GaugeIcon className="size-6 dark:text-page-accent" />
-      </NavButton>
-
-      {/* Plugin icons */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={plugins.map((p) => p.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          {plugins.map((plugin) => (
-            <SortableNavPlugin
-              key={plugin.id}
-              plugin={plugin}
-              isActive={activeView === plugin.id}
-              isDark={isDark}
-              onClick={() => onViewChange(plugin.id)}
-              onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
-            />
-          ))}
-        </SortableContext>
-      </DndContext>
-
-      {/* Spacer */}
       <div className="flex-1" />
+      <div className="flex flex-col">
+        <NavButton
+          isActive={false}
+          onClick={() => {
+            invoke("open_settings_window").catch(console.error)
+          }}
+          aria-label="Settings"
+        >
+          <Settings className="size-6" />
+        </NavButton>
 
-      {/* Help */}
-      <NavButton
-        isActive={false}
-        onClick={() => {
-          openUrl("https://github.com/robinebers/openusage/issues").catch(console.error)
-          invoke("hide_panel").catch(console.error)
-        }}
-        aria-label="Help"
-      >
-        <CircleHelp className="size-6" />
-      </NavButton>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={plugins.map((p) => p.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {plugins.map((plugin) => (
+              <SortableNavPlugin
+                key={plugin.id}
+                plugin={plugin}
+                isActive={activeView === plugin.id}
+                isDark={isDark}
+                onClick={() => onViewChange(plugin.id)}
+                onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
 
-      {/* Settings */}
-      <NavButton
-        isActive={activeView === "settings"}
-        onClick={() => onViewChange("settings")}
-        aria-label="Settings"
-      >
-        <Settings className="size-6" />
-      </NavButton>
+        <NavButton
+          isActive={activeView === "home"}
+          onClick={() => onViewChange("home")}
+          aria-label="Home"
+        >
+          <GaugeIcon className="size-6 dark:text-page-accent" />
+        </NavButton>
+      </div>
     </nav>
   )
 }

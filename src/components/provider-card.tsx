@@ -9,13 +9,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SkeletonLines } from "@/components/skeleton-lines"
 import { PluginError } from "@/components/plugin-error"
 import { useNowTicker } from "@/hooks/use-now-ticker"
-import { REFRESH_COOLDOWN_MS, type DisplayMode, type ResetTimerDisplayMode, type TimeFormatMode } from "@/lib/settings"
+import { REFRESH_COOLDOWN_MS, type ResetTimerDisplayMode } from "@/lib/settings"
 import type { ManifestLine, MetricLine, PluginLink } from "@/lib/plugin-types"
 import { groupLinesByType } from "@/lib/group-lines-by-type"
 import { clamp01, formatCountNumber, formatFixedPrecisionNumber } from "@/lib/utils"
-import { calculateDeficit, calculatePaceStatus, type PaceStatus } from "@/lib/pace-status"
-import { buildPaceDetailText, formatDeficitText, formatRunsOutText, getPaceStatusText } from "@/lib/pace-tooltip"
-import { formatResetAbsoluteLabel, formatResetRelativeLabel, formatResetTooltipText } from "@/lib/reset-tooltip"
+import { calculateDrift, calculatePaceStatus, type PaceStatus } from "@/lib/pace-status"
+import { buildPaceDetailText, formatCompactDuration, getPaceStatusText, getRunsOutAtMs } from "@/lib/pace-tooltip"
+import { formatAtLabel, formatResetAbsoluteLabel, formatResetRelativeLabel, formatResetTooltipText } from "@/lib/reset-tooltip"
 
 interface ProviderCardProps {
   name: string
@@ -30,9 +30,7 @@ interface ProviderCardProps {
   lastUpdatedAt?: number | null
   onRetry?: () => void
   scopeFilter?: "overview" | "all"
-  displayMode: DisplayMode
   resetTimerDisplayMode?: ResetTimerDisplayMode
-  timeFormatMode?: TimeFormatMode
   onResetTimerDisplayModeToggle?: () => void
 }
 
@@ -40,6 +38,21 @@ const PACE_VISUALS: Record<PaceStatus, { dotClass: string }> = {
   ahead: { dotClass: "bg-green-500" },
   "on-track": { dotClass: "bg-yellow-500" },
   behind: { dotClass: "bg-red-500" },
+}
+
+function formatProgressValue(amount: number, format: Extract<MetricLine, { type: "progress" }>["format"]): string {
+  if (format.kind === "percent") return `${Math.round(amount)}%`
+  if (format.kind === "dollars") return `$${formatFixedPrecisionNumber(amount)}`
+  return `${formatCountNumber(amount)} ${format.suffix}`
+}
+
+/** Signed value for the drift metric, e.g. "+5%", "-$1.20". */
+function formatSignedProgressValue(
+  value: number,
+  format: Extract<MetricLine, { type: "progress" }>["format"]
+): string {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : ""
+  return `${sign}${formatProgressValue(Math.abs(value), format)}`
 }
 
 /** Colored dot indicator showing pace status */
@@ -105,9 +118,7 @@ export function ProviderCard({
   lastUpdatedAt,
   onRetry,
   scopeFilter = "all",
-  displayMode,
   resetTimerDisplayMode = "relative",
-  timeFormatMode = "auto",
   onResetTimerDisplayModeToggle,
 }: ProviderCardProps) {
   const cooldownRemainingMs = useMemo(() => {
@@ -311,9 +322,7 @@ export function ProviderCard({
                     <MetricLineRenderer
                       key={`${line.label}-${gi}-${li}`}
                       line={line}
-                      displayMode={displayMode}
                       resetTimerDisplayMode={resetTimerDisplayMode}
-                      timeFormatMode={timeFormatMode}
                       onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}
                       now={now}
                       refreshing={isRefreshingWithData}
@@ -326,9 +335,7 @@ export function ProviderCard({
                     <MetricLineRenderer
                       key={`${line.label}-${gi}-${li}`}
                       line={line}
-                      displayMode={displayMode}
                       resetTimerDisplayMode={resetTimerDisplayMode}
-                      timeFormatMode={timeFormatMode}
                       onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}
                       now={now}
                       refreshing={isRefreshingWithData}
@@ -348,17 +355,13 @@ export function ProviderCard({
 
 function MetricLineRenderer({
   line,
-  displayMode,
   resetTimerDisplayMode,
-  timeFormatMode,
   onResetTimerDisplayModeToggle,
   now,
   refreshing,
 }: {
   line: MetricLine
-  displayMode: DisplayMode
   resetTimerDisplayMode: ResetTimerDisplayMode
-  timeFormatMode: TimeFormatMode
   onResetTimerDisplayModeToggle?: () => void
   now: number
   refreshing?: boolean
@@ -413,23 +416,19 @@ function MetricLineRenderer({
     const periodDurationMs = line.periodDurationMs
     const hasPaceContext = Number.isFinite(resetsAtMs) && Number.isFinite(periodDurationMs)
     const hasTimeMarkerContext = hasPaceContext && periodDurationMs! > 0
-    const shownAmount =
-      displayMode === "used"
-        ? line.used
-        : Math.max(0, line.limit - line.used)
-    const percent = Math.round(clamp01(shownAmount / line.limit) * 10000) / 100
-    const leftSuffix = displayMode === "left" ? " left" : ""
-
-    const primaryText =
-      line.format.kind === "percent"
-        ? `${Math.round(shownAmount)}%${leftSuffix}`
-        : line.format.kind === "dollars"
-          ? `$${formatFixedPrecisionNumber(shownAmount)}${leftSuffix}`
-          : `${formatCountNumber(shownAmount)} ${line.format.suffix}${leftSuffix}`
+    const drift = hasPaceContext
+      ? calculateDrift(line.used, line.limit, resetsAtMs, periodDurationMs!, now)
+      : null
+    const periodStartMs = hasPaceContext ? resetsAtMs - periodDurationMs! : Number.NaN
+    const elapsedFraction = hasPaceContext
+      ? clamp01((now - periodStartMs) / periodDurationMs!)
+      : null
+    const expectedAmount = elapsedFraction !== null ? elapsedFraction * line.limit : null
+    const percent = Math.round(clamp01(line.used / line.limit) * 10000) / 100
 
     const resetLabel = line.resetsAt
       ? resetTimerDisplayMode === "absolute"
-        ? formatResetAbsoluteLabel(now, line.resetsAt, timeFormatMode)
+        ? formatResetAbsoluteLabel(now, line.resetsAt)
         : formatResetRelativeLabel(now, line.resetsAt)
       : null
     const resetTooltipText = line.resetsAt
@@ -437,7 +436,6 @@ function MetricLineRenderer({
           nowMs: now,
           resetsAtIso: line.resetsAt,
           visibleMode: resetTimerDisplayMode,
-          timeFormatMode,
         })
       : null
 
@@ -454,14 +452,9 @@ function MetricLineRenderer({
       ? calculatePaceStatus(line.used, line.limit, resetsAtMs, periodDurationMs!, now)
       : null
     const paceStatus = paceResult?.status ?? null
-    const paceMarkerValue = hasTimeMarkerContext && paceStatus && paceStatus !== "on-track"
-      ? (() => {
-          const periodStartMs = resetsAtMs - periodDurationMs!
-          const elapsedFraction = clamp01((now - periodStartMs) / periodDurationMs!)
-          const elapsedPercent = elapsedFraction * 100
-          return displayMode === "used" ? elapsedPercent : 100 - elapsedPercent
-        })()
-      : undefined
+    // Expected-usage marker: always visible whenever the period is known.
+    const paceMarkerValue =
+      hasTimeMarkerContext && elapsedFraction !== null ? elapsedFraction * 100 : undefined
     const isLimitReached = line.used >= line.limit
     const paceDetailText =
       hasPaceContext && !isLimitReached
@@ -472,18 +465,11 @@ function MetricLineRenderer({
             periodDurationMs: periodDurationMs!,
             resetsAtMs,
             nowMs: now,
-            displayMode,
           })
         : null
 
-    const deficit = hasPaceContext && !isLimitReached
-      ? calculateDeficit(line.used, line.limit, resetsAtMs, periodDurationMs!, now)
-      : null
-    const deficitText = deficit !== null
-      ? formatDeficitText(deficit, line.format, displayMode)
-      : null
-    const runsOutText = hasPaceContext && !isLimitReached
-      ? formatRunsOutText({
+    const runsOutAtMs = hasPaceContext && !isLimitReached
+      ? getRunsOutAtMs({
           paceResult,
           used: line.used,
           limit: line.limit,
@@ -492,6 +478,24 @@ function MetricLineRenderer({
           nowMs: now,
         })
       : null
+    // Mirrors the reset timer's relative/absolute toggle.
+    const runsOutText = runsOutAtMs === null
+      ? null
+      : resetTimerDisplayMode === "absolute"
+        ? `Runs out ${formatAtLabel(now, runsOutAtMs)}`
+        : `Runs out in ${formatCompactDuration(runsOutAtMs - now)}`
+
+    // All metrics under the bar: used, left, and (when the period is known)
+    // drift vs. the ideal pace and the expected usage so far.
+    const metricsParts = [
+      `Used ${formatProgressValue(line.used, line.format)}`,
+      `Left ${formatProgressValue(Math.max(0, line.limit - line.used), line.format)}`,
+    ]
+    if (drift !== null) metricsParts.push(`Drift ${formatSignedProgressValue(drift, line.format)}`)
+    if (expectedAmount !== null) {
+      metricsParts.push(`Expected ${formatProgressValue(expectedAmount, line.format)}`)
+    }
+    const metricsText = metricsParts.join(" · ")
 
     return (
       <div>
@@ -507,9 +511,9 @@ function MetricLineRenderer({
           markerValue={paceMarkerValue}
           refreshing={refreshing}
         />
-        <div className="flex justify-between items-center mt-1.5">
+        <div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-0.5 mt-1.5">
           <span className="text-xs text-muted-foreground tabular-nums">
-            {primaryText}
+            {metricsText}
           </span>
           {secondaryText && (
             resetTooltipText ? (
@@ -549,18 +553,11 @@ function MetricLineRenderer({
             )
           )}
         </div>
-        {(deficitText || runsOutText) && (
-          <div className="flex justify-between items-center mt-0.5">
-            {deficitText && (
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {deficitText}
-              </span>
-            )}
-            {runsOutText && (
-              <span className="text-xs text-muted-foreground tabular-nums ml-auto">
-                {runsOutText}
-              </span>
-            )}
+        {runsOutText && (
+          <div className="flex justify-end items-center mt-0.5">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {runsOutText}
+            </span>
           </div>
         )}
       </div>

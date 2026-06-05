@@ -1,34 +1,31 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
-import { openUrl } from "@tauri-apps/plugin-opener"
-import { invoke } from "@tauri-apps/api/core"
-
 import { SideNav } from "@/components/side-nav"
 
 const darkModeState = vi.hoisted(() => ({
   useDarkModeMock: vi.fn(() => false),
 }))
 
+const tauriState = vi.hoisted(() => ({
+  invokeMock: vi.fn(() => Promise.resolve()),
+}))
+
 vi.mock("@/hooks/use-dark-mode", () => ({
   useDarkMode: darkModeState.useDarkModeMock,
 }))
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(() => Promise.resolve()),
-}))
-
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve()),
+  invoke: tauriState.invokeMock,
 }))
 
 describe("SideNav", () => {
-  it("calls onViewChange for Home and Settings", async () => {
+  it("opens the settings window and navigates Home", async () => {
     const onViewChange = vi.fn()
     render(<SideNav activeView="home" onViewChange={onViewChange} plugins={[]} />)
 
     await userEvent.click(screen.getByRole("button", { name: "Settings" }))
-    expect(onViewChange).toHaveBeenCalledWith("settings")
+    expect(tauriState.invokeMock).toHaveBeenCalledWith("open_settings_window")
 
     await userEvent.click(screen.getByRole("button", { name: "Home" }))
     expect(onViewChange).toHaveBeenCalledWith("home")
@@ -81,13 +78,27 @@ describe("SideNav", () => {
     expect(p2Style).toContain("rgb(255, 255, 255)")
   })
 
-  it("opens the issues page and hides the panel from Help", async () => {
+  it("does not render a Help button", () => {
     const onViewChange = vi.fn()
     render(<SideNav activeView="home" onViewChange={onViewChange} plugins={[]} />)
 
-    await userEvent.click(screen.getByRole("button", { name: "Help" }))
+    expect(screen.queryByRole("button", { name: "Help" })).not.toBeInTheDocument()
+  })
 
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/robinebers/openusage/issues")
-    expect(invoke).toHaveBeenCalledWith("hide_panel")
+  it("keeps provider buttons anchored at the bottom", () => {
+    const onViewChange = vi.fn()
+    render(
+      <SideNav
+        activeView="home"
+        onViewChange={onViewChange}
+        plugins={[{ id: "p", name: "Provider", iconUrl: "icon.svg" }]}
+      />
+    )
+
+    const nav = screen.getByRole("navigation")
+    expect(nav.firstElementChild).toHaveClass("flex-1")
+
+    const buttons = screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))
+    expect(buttons).toEqual(["Settings", "Provider", "Home"])
   })
 })

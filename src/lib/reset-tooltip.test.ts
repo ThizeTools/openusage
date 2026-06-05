@@ -93,32 +93,13 @@ describe("reset-tooltip", () => {
     ).toBe("Resets in 1h 5m")
   })
 
-  it("formats absolute reset labels differently for 12h vs 24h", () => {
-    const nowMs = new Date(2026, 1, 3, 0, 0, 0).getTime()
+  it("uses the system locale time formatter", () => {
     const resetsAtMs = new Date(2026, 1, 3, 14, 5, 0).getTime()
-    const resetsAtIso = new Date(resetsAtMs).toISOString()
-    const expected12 = getTimeFormatter("12h").format(resetsAtMs)
-    const expected24 = getTimeFormatter("24h").format(resetsAtMs)
+    const expected = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(resetsAtMs)
 
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "12h")).toBe(`Resets today at ${expected12}`)
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "24h")).toBe(`Resets today at ${expected24}`)
-    // Sanity: the two formats differ at this hour.
-    expect(expected12).not.toBe(expected24)
-  })
-
-  it("threads timeFormatMode through formatResetTooltipText", () => {
-    const nowMs = new Date(2026, 1, 3, 0, 0, 0).getTime()
-    const resetsAtMs = new Date(2026, 1, 3, 14, 5, 0).getTime()
-    const resetsAtIso = new Date(resetsAtMs).toISOString()
-    const expected24 = getTimeFormatter("24h").format(resetsAtMs)
-
-    expect(
-      formatResetTooltipText({
-        nowMs,
-        resetsAtIso,
-        visibleMode: "relative",
-        timeFormatMode: "24h",
-      })
-    ).toBe(`Resets today at ${expected24}`)
+    expect(getTimeFormatter().format(resetsAtMs)).toBe(expected)
   })
 })

@@ -1,9 +1,9 @@
 use aes_gcm::{
-    aead::{generic_array::typenum::U16, rand_core::RngCore, Aead, KeyInit, OsRng},
-    aes::Aes256,
     AesGcm, Nonce,
+    aead::{Aead, KeyInit, OsRng, generic_array::typenum::U16, rand_core::RngCore},
+    aes::Aes256,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rquickjs::{Ctx, Exception, Function, Object};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +12,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+use windows::Win32::Foundation::ERROR_NOT_FOUND;
+#[cfg(windows)]
+use windows::Win32::Security::Credentials::{
+    CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
+    CredWriteW,
+};
+#[cfg(windows)]
+use windows::core::{PCWSTR, PWSTR};
 
 const WHITELISTED_ENV_VARS: [&str; 16] = [
     "CODEX_HOME",
@@ -134,11 +144,13 @@ fn read_command_stdout(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn read_env_value_via_command(program: &str, args: &[&str]) -> Option<String> {
     let stdout = read_command_stdout(program, args)?;
     sanitize_env_value(&stdout)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn current_macos_keychain_account_from_user_env(user_env: Option<String>) -> String {
     user_env
         .and_then(|value| {
@@ -153,10 +165,12 @@ fn current_macos_keychain_account_from_user_env(user_env: Option<String>) -> Str
         .unwrap_or_else(|| "openusage-user".to_string())
 }
 
+#[cfg(target_os = "macos")]
 fn current_macos_keychain_account() -> String {
     current_macos_keychain_account_from_user_env(read_env_from_process("USER"))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn keychain_find_generic_password_args(service: &str) -> Vec<OsString> {
     vec![
         OsString::from("find-generic-password"),
@@ -166,6 +180,7 @@ fn keychain_find_generic_password_args(service: &str) -> Vec<OsString> {
     ]
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn keychain_find_generic_password_args_for_account(service: &str, account: &str) -> Vec<OsString> {
     vec![
         OsString::from("find-generic-password"),
@@ -177,6 +192,7 @@ fn keychain_find_generic_password_args_for_account(service: &str, account: &str)
     ]
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn keychain_add_generic_password_args(service: &str, value: &str) -> Vec<OsString> {
     vec![
         OsString::from("add-generic-password"),
@@ -188,6 +204,7 @@ fn keychain_add_generic_password_args(service: &str, value: &str) -> Vec<OsStrin
     ]
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn keychain_add_generic_password_args_for_account(
     service: &str,
     account: &str,
@@ -203,6 +220,79 @@ fn keychain_add_generic_password_args_for_account(
         OsString::from("-w"),
         OsString::from(value),
     ]
+}
+
+#[cfg(windows)]
+fn windows_wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn windows_read_credential(service: &str) -> Result<String, String> {
+    let target = windows_wide_null(service);
+    let mut credential = std::ptr::null_mut();
+    unsafe {
+        CredReadW(
+            PCWSTR::from_raw(target.as_ptr()),
+            CRED_TYPE_GENERIC,
+            Some(0),
+            &mut credential,
+        )
+        .map_err(|err| {
+            if err.code() == ERROR_NOT_FOUND.to_hresult() {
+                "keychain item not found".to_string()
+            } else {
+                format!("credential read failed: {err}")
+            }
+        })?;
+
+        let credential_ref = &*credential;
+        let bytes = std::slice::from_raw_parts(
+            credential_ref.CredentialBlob,
+            credential_ref.CredentialBlobSize as usize,
+        );
+        let value = String::from_utf8(bytes.to_vec())
+            .map_err(|err| format!("credential value is not UTF-8: {err}"));
+        CredFree(credential.cast());
+        value
+    }
+}
+
+#[cfg(windows)]
+fn windows_write_credential(service: &str, value: &str) -> Result<(), String> {
+    let mut target = windows_wide_null(service);
+    let mut username = windows_wide_null("OpenUsage");
+    let mut blob = value.as_bytes().to_vec();
+    let credential = CREDENTIALW {
+        Type: CRED_TYPE_GENERIC,
+        TargetName: PWSTR::from_raw(target.as_mut_ptr()),
+        CredentialBlobSize: blob.len() as u32,
+        CredentialBlob: blob.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        UserName: PWSTR::from_raw(username.as_mut_ptr()),
+        ..Default::default()
+    };
+
+    unsafe { CredWriteW(&credential, 0).map_err(|err| format!("credential write failed: {err}")) }
+}
+
+#[cfg(windows)]
+fn windows_delete_credential(service: &str) -> Result<(), String> {
+    let target = windows_wide_null(service);
+    unsafe {
+        CredDeleteW(
+            PCWSTR::from_raw(target.as_ptr()),
+            CRED_TYPE_GENERIC,
+            Some(0),
+        )
+        .map_err(|err| {
+            if err.code() == ERROR_NOT_FOUND.to_hresult() {
+                "keychain item not found".to_string()
+            } else {
+                format!("credential delete failed: {err}")
+            }
+        })
+    }
 }
 
 fn terminal_env_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
@@ -1834,6 +1924,8 @@ fn ccusage_runner_available(candidate: &str, enriched_path: Option<&OsStr>) -> b
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
+    suppress_console_window(&mut command);
+
     command.status().map(|s| s.success()).unwrap_or(false)
 }
 
@@ -1855,7 +1947,21 @@ fn configure_ccusage_command(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+
+    suppress_console_window(command);
 }
+
+/// On Windows, spawning console subprocesses (npx/bunx/cmd) flashes a terminal window on screen.
+/// CREATE_NO_WINDOW (0x08000000) suppresses it; child processes inherit the missing console.
+#[cfg(windows)]
+fn suppress_console_window(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn suppress_console_window(_command: &mut std::process::Command) {}
 
 fn resolve_ccusage_runner_binary(kind: CcusageRunnerKind) -> Option<String> {
     let path = ccusage_enriched_path();
@@ -2388,44 +2494,56 @@ fn inject_keychain<'js>(
         Function::new(
             ctx.clone(),
             move |ctx_inner: Ctx<'_>, service: String| -> rquickjs::Result<String> {
-                if !cfg!(target_os = "macos") {
+                #[cfg(windows)]
+                {
+                    log::info!("[plugin:{}] credential read: service={}", pid_read, service);
+                    return windows_read_credential(&service)
+                        .map_err(|e| Exception::throw_message(&ctx_inner, &e));
+                }
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "keychain API is only supported on macOS",
+                        "keychain API is only supported on macOS and Windows",
                     ));
                 }
-                log::info!("[plugin:{}] keychain read: service={}", pid_read, service);
-                let output = std::process::Command::new("security")
-                    .args(keychain_find_generic_password_args(&service))
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(
+
+                #[cfg(target_os = "macos")]
+                {
+                    log::info!("[plugin:{}] keychain read: service={}", pid_read, service);
+                    let output = std::process::Command::new("security")
+                        .args(keychain_find_generic_password_args(&service))
+                        .output()
+                        .map_err(|e| {
+                            Exception::throw_message(
+                                &ctx_inner,
+                                &format!("keychain read failed: {}", e),
+                            )
+                        })?;
+
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let first_line = stderr.lines().next().unwrap_or("").trim();
+                        log::warn!(
+                            "[plugin:{}] keychain read miss: service={}, error={}",
+                            pid_read,
+                            service,
+                            first_line
+                        );
+                        return Err(Exception::throw_message(
                             &ctx_inner,
-                            &format!("keychain read failed: {}", e),
-                        )
-                    })?;
+                            &format!("keychain item not found: {}", first_line),
+                        ));
+                    }
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let first_line = stderr.lines().next().unwrap_or("").trim();
-                    log::warn!(
-                        "[plugin:{}] keychain read miss: service={}, error={}",
+                    log::info!(
+                        "[plugin:{}] keychain read hit: service={}",
                         pid_read,
-                        service,
-                        first_line
+                        service
                     );
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!("keychain item not found: {}", first_line),
-                    ));
+                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
                 }
-
-                log::info!(
-                    "[plugin:{}] keychain read hit: service={}",
-                    pid_read,
-                    service
-                );
-                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
             },
         )?,
     )?;
@@ -2436,54 +2554,70 @@ fn inject_keychain<'js>(
         Function::new(
             ctx.clone(),
             move |ctx_inner: Ctx<'_>, service: String| -> rquickjs::Result<String> {
-                if !cfg!(target_os = "macos") {
+                #[cfg(windows)]
+                {
+                    log::info!(
+                        "[plugin:{}] credential read: service={}",
+                        pid_read_current_user,
+                        service
+                    );
+                    return windows_read_credential(&service)
+                        .map_err(|e| Exception::throw_message(&ctx_inner, &e));
+                }
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "keychain API is only supported on macOS",
+                        "keychain API is only supported on macOS and Windows",
                     ));
                 }
-                let account = current_macos_keychain_account();
-                let args = keychain_find_generic_password_args_for_account(&service, &account);
-                let redacted_account = redact_value(&account);
-                log::info!(
-                    "[plugin:{}] keychain read: service={}, account={}",
-                    pid_read_current_user,
-                    service,
-                    redacted_account
-                );
-                let output = std::process::Command::new("security")
-                    .args(&args)
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(
-                            &ctx_inner,
-                            &format!("keychain read failed: {}", e),
-                        )
-                    })?;
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let first_line = stderr.lines().next().unwrap_or("").trim();
-                    log::warn!(
-                        "[plugin:{}] keychain read miss: service={}, account={}, error={}",
+                #[cfg(target_os = "macos")]
+                {
+                    let account = current_macos_keychain_account();
+                    let args = keychain_find_generic_password_args_for_account(&service, &account);
+                    let redacted_account = redact_value(&account);
+                    log::info!(
+                        "[plugin:{}] keychain read: service={}, account={}",
                         pid_read_current_user,
                         service,
-                        redacted_account,
-                        first_line
+                        redacted_account
                     );
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!("keychain item not found: {}", first_line),
-                    ));
-                }
+                    let output = std::process::Command::new("security")
+                        .args(&args)
+                        .output()
+                        .map_err(|e| {
+                            Exception::throw_message(
+                                &ctx_inner,
+                                &format!("keychain read failed: {}", e),
+                            )
+                        })?;
 
-                log::info!(
-                    "[plugin:{}] keychain read hit: service={}, account={}",
-                    pid_read_current_user,
-                    service,
-                    redacted_account
-                );
-                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let first_line = stderr.lines().next().unwrap_or("").trim();
+                        log::warn!(
+                            "[plugin:{}] keychain read miss: service={}, account={}, error={}",
+                            pid_read_current_user,
+                            service,
+                            redacted_account,
+                            first_line
+                        );
+                        return Err(Exception::throw_message(
+                            &ctx_inner,
+                            &format!("keychain item not found: {}", first_line),
+                        ));
+                    }
+
+                    log::info!(
+                        "[plugin:{}] keychain read hit: service={}, account={}",
+                        pid_read_current_user,
+                        service,
+                        redacted_account
+                    );
+                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                }
             },
         )?,
     )?;
@@ -2494,70 +2628,89 @@ fn inject_keychain<'js>(
         Function::new(
             ctx.clone(),
             move |ctx_inner: Ctx<'_>, service: String, value: String| -> rquickjs::Result<()> {
-                if !cfg!(target_os = "macos") {
+                #[cfg(windows)]
+                {
+                    log::info!(
+                        "[plugin:{}] credential write: service={}",
+                        pid_write,
+                        service
+                    );
+                    return windows_write_credential(&service, &value)
+                        .map_err(|e| Exception::throw_message(&ctx_inner, &e));
+                }
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "keychain API is only supported on macOS",
+                        "keychain API is only supported on macOS and Windows",
                     ));
                 }
-                log::info!("[plugin:{}] keychain write: service={}", pid_write, service);
 
-                let mut account_arg: Option<String> = None;
-                let find_output = std::process::Command::new("security")
-                    .args(["find-generic-password", "-s", &service])
-                    .output();
+                #[cfg(target_os = "macos")]
+                {
+                    log::info!("[plugin:{}] keychain write: service={}", pid_write, service);
 
-                if let Ok(output) = find_output {
-                    if output.status.success() {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        for line in stdout.lines() {
-                            if let Some(start) = line.find("\"acct\"<blob>=\"") {
-                                let rest = &line[start + 14..];
-                                if let Some(end) = rest.find('"') {
-                                    account_arg = Some(rest[..end].to_string());
-                                    break;
+                    let mut account_arg: Option<String> = None;
+                    let find_output = std::process::Command::new("security")
+                        .args(["find-generic-password", "-s", &service])
+                        .output();
+
+                    if let Ok(output) = find_output {
+                        if output.status.success() {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            for line in stdout.lines() {
+                                if let Some(start) = line.find("\"acct\"<blob>=\"") {
+                                    let rest = &line[start + 14..];
+                                    if let Some(end) = rest.find('"') {
+                                        account_arg = Some(rest[..end].to_string());
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                let output = if let Some(ref acct) = account_arg {
-                    std::process::Command::new("security")
-                        .args(keychain_add_generic_password_args_for_account(
-                            &service, acct, &value,
-                        ))
-                        .output()
-                } else {
-                    std::process::Command::new("security")
-                        .args(keychain_add_generic_password_args(&service, &value))
-                        .output()
-                }
-                .map_err(|e| {
-                    Exception::throw_message(&ctx_inner, &format!("keychain write failed: {}", e))
-                })?;
+                    let output = if let Some(ref acct) = account_arg {
+                        std::process::Command::new("security")
+                            .args(keychain_add_generic_password_args_for_account(
+                                &service, acct, &value,
+                            ))
+                            .output()
+                    } else {
+                        std::process::Command::new("security")
+                            .args(keychain_add_generic_password_args(&service, &value))
+                            .output()
+                    }
+                    .map_err(|e| {
+                        Exception::throw_message(
+                            &ctx_inner,
+                            &format!("keychain write failed: {}", e),
+                        )
+                    })?;
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let first_line = stderr.lines().next().unwrap_or("").trim();
-                    log::warn!(
-                        "[plugin:{}] keychain write failed: service={}, error={}",
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let first_line = stderr.lines().next().unwrap_or("").trim();
+                        log::warn!(
+                            "[plugin:{}] keychain write failed: service={}, error={}",
+                            pid_write,
+                            service,
+                            first_line
+                        );
+                        return Err(Exception::throw_message(
+                            &ctx_inner,
+                            &format!("keychain write failed: {}", first_line),
+                        ));
+                    }
+
+                    log::info!(
+                        "[plugin:{}] keychain write succeeded: service={}",
                         pid_write,
-                        service,
-                        first_line
+                        service
                     );
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!("keychain write failed: {}", first_line),
-                    ));
+                    Ok(())
                 }
-
-                log::info!(
-                    "[plugin:{}] keychain write succeeded: service={}",
-                    pid_write,
-                    service
-                );
-                Ok(())
             },
         )?,
     )?;
@@ -2568,61 +2721,191 @@ fn inject_keychain<'js>(
         Function::new(
             ctx.clone(),
             move |ctx_inner: Ctx<'_>, service: String, value: String| -> rquickjs::Result<()> {
-                if !cfg!(target_os = "macos") {
+                #[cfg(windows)]
+                {
+                    log::info!(
+                        "[plugin:{}] credential write: service={}",
+                        pid_write_current_user,
+                        service
+                    );
+                    return windows_write_credential(&service, &value)
+                        .map_err(|e| Exception::throw_message(&ctx_inner, &e));
+                }
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "keychain API is only supported on macOS",
+                        "keychain API is only supported on macOS and Windows",
                     ));
                 }
-                let account = current_macos_keychain_account();
-                let args =
-                    keychain_add_generic_password_args_for_account(&service, &account, &value);
-                let redacted_account = redact_value(&account);
-                log::info!(
-                    "[plugin:{}] keychain write: service={}, account={}",
-                    pid_write_current_user,
-                    service,
-                    redacted_account
-                );
-                let output = std::process::Command::new("security")
-                    .args(&args)
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(
-                            &ctx_inner,
-                            &format!("keychain write failed: {}", e),
-                        )
-                    })?;
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let first_line = stderr.lines().next().unwrap_or("").trim();
-                    log::warn!(
-                        "[plugin:{}] keychain write failed: service={}, account={}, error={}",
+                #[cfg(target_os = "macos")]
+                {
+                    let account = current_macos_keychain_account();
+                    let args =
+                        keychain_add_generic_password_args_for_account(&service, &account, &value);
+                    let redacted_account = redact_value(&account);
+                    log::info!(
+                        "[plugin:{}] keychain write: service={}, account={}",
                         pid_write_current_user,
                         service,
-                        redacted_account,
-                        first_line
+                        redacted_account
                     );
+                    let output = std::process::Command::new("security")
+                        .args(&args)
+                        .output()
+                        .map_err(|e| {
+                            Exception::throw_message(
+                                &ctx_inner,
+                                &format!("keychain write failed: {}", e),
+                            )
+                        })?;
+
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let first_line = stderr.lines().next().unwrap_or("").trim();
+                        log::warn!(
+                            "[plugin:{}] keychain write failed: service={}, account={}, error={}",
+                            pid_write_current_user,
+                            service,
+                            redacted_account,
+                            first_line
+                        );
+                        return Err(Exception::throw_message(
+                            &ctx_inner,
+                            &format!("keychain write failed: {}", first_line),
+                        ));
+                    }
+
+                    log::info!(
+                        "[plugin:{}] keychain write succeeded: service={}, account={}",
+                        pid_write_current_user,
+                        service,
+                        redacted_account
+                    );
+                    Ok(())
+                }
+            },
+        )?,
+    )?;
+
+    let pid_delete = plugin_id.to_string();
+    keychain_obj.set(
+        "deleteGenericPassword",
+        Function::new(
+            ctx.clone(),
+            move |ctx_inner: Ctx<'_>, service: String| -> rquickjs::Result<()> {
+                #[cfg(windows)]
+                {
+                    log::info!(
+                        "[plugin:{}] credential delete: service={}",
+                        pid_delete,
+                        service
+                    );
+                    return windows_delete_credential(&service)
+                        .map_err(|e| Exception::throw_message(&ctx_inner, &e));
+                }
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        &format!("keychain write failed: {}", first_line),
+                        "keychain API is only supported on macOS and Windows",
                     ));
                 }
 
-                log::info!(
-                    "[plugin:{}] keychain write succeeded: service={}, account={}",
-                    pid_write_current_user,
-                    service,
-                    redacted_account
-                );
-                Ok(())
+                #[cfg(target_os = "macos")]
+                {
+                    log::info!(
+                        "[plugin:{}] keychain delete: service={}",
+                        pid_delete,
+                        service
+                    );
+                    let output = std::process::Command::new("security")
+                        .args(["delete-generic-password", "-s", &service])
+                        .output()
+                        .map_err(|e| {
+                            Exception::throw_message(
+                                &ctx_inner,
+                                &format!("keychain delete failed: {}", e),
+                            )
+                        })?;
+
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let first_line = stderr.lines().next().unwrap_or("").trim();
+                        return Err(Exception::throw_message(
+                            &ctx_inner,
+                            &format!("keychain delete failed: {}", first_line),
+                        ));
+                    }
+                    Ok(())
+                }
             },
         )?,
     )?;
 
     host.set("keychain", keychain_obj)?;
     Ok(())
+}
+
+fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
+    match value {
+        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+        rusqlite::types::ValueRef::Integer(value) => serde_json::json!(value),
+        rusqlite::types::ValueRef::Real(value) => serde_json::json!(value),
+        rusqlite::types::ValueRef::Text(value) => {
+            serde_json::Value::String(String::from_utf8_lossy(value).to_string())
+        }
+        rusqlite::types::ValueRef::Blob(value) => {
+            serde_json::Value::String(BASE64_STANDARD.encode(value))
+        }
+    }
+}
+
+fn sqlite_query_json(db_path: &str, sql: &str) -> Result<String, String> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        | rusqlite::OpenFlags::SQLITE_OPEN_URI
+        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let connection = rusqlite::Connection::open_with_flags(db_path, flags)
+        .map_err(|err| format!("sqlite open failed: {err}"))?;
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|err| format!("sqlite prepare failed: {err}"))?;
+    let column_names: Vec<String> = statement
+        .column_names()
+        .into_iter()
+        .map(ToString::to_string)
+        .collect();
+    let mut rows = statement
+        .query([])
+        .map_err(|err| format!("sqlite query failed: {err}"))?;
+    let mut output = Vec::new();
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| format!("sqlite row failed: {err}"))?
+    {
+        let mut object = serde_json::Map::new();
+        for (index, name) in column_names.iter().enumerate() {
+            let value = row
+                .get_ref(index)
+                .map_err(|err| format!("sqlite column failed: {err}"))?;
+            object.insert(name.clone(), sqlite_value_to_json(value));
+        }
+        output.push(serde_json::Value::Object(object));
+    }
+
+    serde_json::to_string(&output).map_err(|err| format!("sqlite json failed: {err}"))
+}
+
+fn sqlite_exec_batch(db_path: &str, sql: &str) -> Result<(), String> {
+    let connection =
+        rusqlite::Connection::open(db_path).map_err(|err| format!("sqlite open failed: {err}"))?;
+    connection
+        .execute_batch(sql)
+        .map_err(|err| format!("sqlite exec failed: {err}"))
 }
 
 fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()> {
@@ -2640,48 +2923,8 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                     ));
                 }
                 let expanded = expand_path(&db_path);
-
-                // Prefer a normal read-only open so WAL contents are visible (common for app state DBs).
-                // Fall back to immutable=1 to bypass WAL/SHM lock issues after macOS sleep.
-                let primary = std::process::Command::new("sqlite3")
-                    .args(["-readonly", "-json", &expanded, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if primary.status.success() {
-                    return Ok(String::from_utf8_lossy(&primary.stdout).to_string());
-                }
-
-                // Percent-encode special chars for valid URI (% must be first!)
-                let encoded = expanded
-                    .replace('%', "%25")
-                    .replace(' ', "%20")
-                    .replace('#', "%23")
-                    .replace('?', "%3F");
-                let uri_path = format!("file:{}?immutable=1", encoded);
-                let fallback = std::process::Command::new("sqlite3")
-                    .args(["-readonly", "-json", &uri_path, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if !fallback.status.success() {
-                    let stderr_primary = String::from_utf8_lossy(&primary.stderr);
-                    let stderr_fallback = String::from_utf8_lossy(&fallback.stderr);
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!(
-                            "sqlite3 error: {} (fallback: {})",
-                            stderr_primary.trim(),
-                            stderr_fallback.trim()
-                        ),
-                    ));
-                }
-
-                Ok(String::from_utf8_lossy(&fallback.stdout).to_string())
+                sqlite_query_json(&expanded, &sql)
+                    .map_err(|e| Exception::throw_message(&ctx_inner, &e))
             },
         )?,
     )?;
@@ -2698,22 +2941,8 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                     ));
                 }
                 let expanded = expand_path(&db_path);
-                let output = std::process::Command::new("sqlite3")
-                    .args([&expanded, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!("sqlite3 error: {}", stderr.trim()),
-                    ));
-                }
-
-                Ok(())
+                sqlite_exec_batch(&expanded, &sql)
+                    .map_err(|e| Exception::throw_message(&ctx_inner, &e))
             },
         )?,
     )?;
