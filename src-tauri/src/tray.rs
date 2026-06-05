@@ -1,8 +1,10 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_store::StoreExt;
 
+use crate::log_path;
 use crate::panel::show_panel;
 
 const LOG_LEVEL_STORE_KEY: &str = "logLevel";
@@ -55,11 +57,21 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     log::set_max_level(get_stored_log_level(app_handle));
 
     let show_stats = MenuItem::with_id(app_handle, "show_stats", "Show Stats", true, None::<&str>)?;
+    let copy_log_path = MenuItem::with_id(
+        app_handle,
+        "copy_log_path",
+        "Copy Log Path",
+        true,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app_handle)?;
     let about = MenuItem::with_id(app_handle, "about", "About WinUsage", true, None::<&str>)?;
     let quit = MenuItem::with_id(app_handle, "quit", "Quit", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app_handle, &[&show_stats, &separator, &about, &quit])?;
+    let menu = Menu::with_items(
+        app_handle,
+        &[&show_stats, &copy_log_path, &separator, &about, &quit],
+    )?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
@@ -81,6 +93,21 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
                     log::info!("quit requested via tray");
                     app_handle.exit(0);
                 }
+                "copy_log_path" => match log_path::for_app(app_handle) {
+                    Ok(path) => {
+                        if let Err(error) = app_handle
+                            .clipboard()
+                            .write_text(path.to_string_lossy().to_string())
+                        {
+                            log::error!("failed to copy log path to clipboard: {}", error);
+                        } else {
+                            log::info!("copied log path to clipboard");
+                        }
+                    }
+                    Err(error) => {
+                        log::error!("failed to resolve log path: {}", error);
+                    }
+                },
                 _ => {}
             }
         })

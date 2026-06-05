@@ -21,6 +21,7 @@ const {
   loadWidgetProviderIdsMock,
   loadWidgetVisibleMock,
   migrateLegacyTraySettingsMock,
+  migrateWindsurfToDevinMock,
   normalizePluginSettingsMock,
   savePluginSettingsMock,
 } = vi.hoisted(() => ({
@@ -43,6 +44,7 @@ const {
   loadWidgetProviderIdsMock: vi.fn(),
   loadWidgetVisibleMock: vi.fn(),
   migrateLegacyTraySettingsMock: vi.fn(),
+  migrateWindsurfToDevinMock: vi.fn(),
   normalizePluginSettingsMock: vi.fn(),
   savePluginSettingsMock: vi.fn(),
 }))
@@ -83,6 +85,7 @@ vi.mock("@/lib/settings", () => ({
   loadWidgetProviderIds: loadWidgetProviderIdsMock,
   loadWidgetVisible: loadWidgetVisibleMock,
   migrateLegacyTraySettings: migrateLegacyTraySettingsMock,
+  migrateWindsurfToDevin: migrateWindsurfToDevinMock,
   normalizePluginSettings: normalizePluginSettingsMock,
   savePluginSettings: savePluginSettingsMock,
 }))
@@ -130,6 +133,7 @@ describe("useSettingsBootstrap", () => {
     loadWidgetProviderIdsMock.mockReset()
     loadWidgetVisibleMock.mockReset()
     migrateLegacyTraySettingsMock.mockReset()
+    migrateWindsurfToDevinMock.mockReset()
     normalizePluginSettingsMock.mockReset()
     savePluginSettingsMock.mockReset()
 
@@ -159,6 +163,7 @@ describe("useSettingsBootstrap", () => {
     loadWidgetProviderIdsMock.mockResolvedValue(null)
     loadWidgetVisibleMock.mockResolvedValue(false)
     migrateLegacyTraySettingsMock.mockResolvedValue(undefined)
+    migrateWindsurfToDevinMock.mockImplementation((settings) => settings)
     savePluginSettingsMock.mockResolvedValue(undefined)
     getEnabledPluginIdsMock.mockReturnValue(["codex"])
   })
@@ -190,5 +195,40 @@ describe("useSettingsBootstrap", () => {
     })
 
     errorSpy.mockRestore()
+  })
+
+  it("migrates windsurf settings before normalizing and saves the first-launch result", async () => {
+    const args = createArgs()
+    const storedSettings = { order: ["windsurf"], disabled: [] }
+    const migratedSettings = { order: ["devin"], disabled: [] }
+    const availablePlugins = [
+      {
+        id: "devin",
+        name: "Devin",
+        iconUrl: "/devin.svg",
+        brandColor: "#000000",
+        lines: [],
+        primaryCandidates: [],
+      },
+    ]
+
+    invokeMock.mockResolvedValueOnce(availablePlugins)
+    loadPluginSettingsMock.mockResolvedValueOnce(storedSettings)
+    migrateWindsurfToDevinMock.mockReturnValueOnce(migratedSettings)
+    normalizePluginSettingsMock.mockReturnValueOnce(migratedSettings)
+    arePluginSettingsEqualMock.mockReturnValueOnce(false)
+    getEnabledPluginIdsMock.mockReturnValueOnce(["devin"])
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(normalizePluginSettingsMock).toHaveBeenCalledWith(
+        migratedSettings,
+        availablePlugins
+      )
+      expect(savePluginSettingsMock).toHaveBeenCalledWith(migratedSettings)
+      expect(args.setPluginSettings).toHaveBeenCalledWith(migratedSettings)
+      expect(args.startBatch).toHaveBeenCalledWith(["devin"])
+    })
   })
 })

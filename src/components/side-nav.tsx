@@ -216,7 +216,7 @@ export function SideNav({
   return (
     <nav className="flex flex-col w-12 border-r bg-muted/50 dark:bg-card py-3">
       <div className="flex-1" />
-      <div className="flex flex-col">
+      <div className="flex min-h-0 flex-col">
         <NavButton
           isActive={false}
           onClick={() => {
@@ -227,27 +227,30 @@ export function SideNav({
           <Settings className="size-6" />
         </NavButton>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={plugins.map((p) => p.id)}
-            strategy={verticalListSortingStrategy}
+        {/* Plugin icons */}
+        <div className="flex min-h-0 flex-col overflow-y-auto scrollbar-none">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
           >
-            {plugins.map((plugin) => (
-              <SortableNavPlugin
-                key={plugin.id}
-                plugin={plugin}
-                isActive={activeView === plugin.id}
-                isDark={isDark}
-                onClick={() => onViewChange(plugin.id)}
-                onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
+            <SortableContext
+              items={plugins.map((p) => p.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {plugins.map((plugin) => (
+                <SortableNavPlugin
+                  key={plugin.id}
+                  plugin={plugin}
+                  isActive={activeView === plugin.id}
+                  isDark={isDark}
+                  onClick={() => onViewChange(plugin.id)}
+                  onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        </div>
 
         <NavButton
           isActive={activeView === "home"}
