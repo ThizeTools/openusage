@@ -1,229 +1,55 @@
 # Cursor
 
-> Reverse-engineered, undocumented API. May change without notice.
+Account plugin. Sign in from Settings > Accounts (Cursor CLI browser login, poll). The plugin reads only the saved credentials and never local Cursor files.
 
-## Overview
+## Sign-in and credentials
 
-- **Protocol:** Connect RPC v1 (JSON over HTTP)
-- **Base URL:** `https://api2.cursor.sh`
-- **Service:** `aiserver.v1.DashboardService`
-- **Auth provider:** Auth0 (via Cursor)
-- **Client ID:** `KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB`
-- **Amounts:** cents (divide by 100 for dollars)
-- **Timestamps:** unix milliseconds (as strings)
+- `auth`: `{ "kind": "cursor" }`
+- Saved credentials: the poll response, `accessToken` and `refreshToken` (both a 60-day JWT). `expiresAt` is taken from the JWT `exp`.
 
-## Plugin metrics
+## Refresh
 
-| Metric | Source field | Scope | Format | Notes |
-|---|---|---|---|---|
-| Credits | `GetCreditGrantsBalance` + `/api/auth/stripe.customerBalance` | overview | dollars | Combined total: active grant total + Stripe prepaid balance (negative `customerBalance`). Used stays based on grant usage. |
-| Total usage | `planUsage.totalPercentUsed` | overview | percent (individual) / dollars (team) | Falls back to computed `(limit - remaining) / limit * 100` when `totalPercentUsed` is not finite. Free/individual payloads observed on 2026-03-06 may omit `limit`; plugin uses `totalPercentUsed` directly in that case. Team accounts use dollars format and still require `limit`. |
-| Auto usage | `planUsage.autoPercentUsed` | detail | percent | Omitted when field is missing or non-finite |
-| API usage | `planUsage.apiPercentUsed` | detail | percent | Omitted when field is missing or non-finite |
-| Requests | `/api/usage` (enterprise) | overview | count | Enterprise accounts only; unchanged from previous behavior |
-| On-demand | `spendLimitUsage` | detail | dollars | Only when individual or pooled limit > 0 |
-
-**Enterprise flow** remains request-based via the REST `/api/usage` endpoint -- unchanged.
-
-**Team detection**: an account is treated as "team" when `planName` is `"Team"`, or `spendLimitUsage.limitType` is `"team"`, or `spendLimitUsage.pooledLimit` is greater than `0`. Team accounts display Total usage in dollars; individual accounts display it as a percentage.
+- `POST https://api2.cursor.sh/oauth/token` (JSON: `grant_type`, `client_id`, `refresh_token`).
+- Runs 7 days before JWT `exp`, and once on 401/403 from the usage read.
+- Response has `access_token` only; the new JWT becomes the next refresh token.
+- `shouldLogout`, or `invalid_grant` and similar refusals: throws the sign-in message.
+- If an early refresh fails while the token is still valid, the current token is kept and a warning is logged.
+- Saves with `ctx.account.saveCredentials` (old fields merged, `expiresAt` recomputed).
 
 ## Endpoints
 
-### POST /aiserver.v1.DashboardService/GetCurrentPeriodUsage
+Connect RPC (`POST`, `Authorization: Bearer <accessToken>`, `Connect-Protocol-Version: 1`, body `{}`), base `https://api2.cursor.sh/aiserver.v1.DashboardService/`:
 
-Returns current billing cycle spend, limits, and percentage used.
+- `GetCurrentPeriodUsage` (required)
+- `GetPlanInfo` (plan name)
+- `GetCreditGrantsBalance` (Credits)
+- `GetSandUsageStatus` (Grok Bot)
 
-#### Headers
+Cookie reads (`Cookie: WorkosCursorSessionToken=<userId>%3A%3A<accessToken>`, `userId` from JWT `sub`):
 
-| Header | Required | Value |
-|---|---|---|
-| Authorization | yes | `Bearer <access_token>` |
-| Content-Type | yes | `application/json` |
-| Connect-Protocol-Version | yes | `1` |
+- `https://cursor.com/api/usage-summary` (membership, team/on-demand fallback)
+- `https://cursor.com/api/usage?user=<userId>` (request-based fallback)
+- `https://cursor.com/api/auth/stripe` (prepaid balance, added to Credits)
+- `https://cursor.com/api/auth/me` (account label, email)
 
-#### Request
+Optional reads that fail are logged and skipped.
 
-```json
-{}
-```
+## Metrics
 
-#### Response
+| Line | Type | Source | Scope |
+|---|---|---|---|
+| Total Usage | percent (dollars for team) | `planUsage.totalPercentUsed` | overview, primary 1 |
+| Cursor Models | percent | `planUsage.autoPercentUsed` | overview, primary 2 |
+| Other Models | percent | `planUsage.apiPercentUsed` | overview, primary 3 |
+| Requests | count (requests) | `/api/usage` `gpt-4` (fallback only) | overview, primary 4 |
+| Credits | text, `$X left` | grants + Stripe balance | overview |
+| Extra Usage | dollars (text when no limit) | `spendLimitUsage` / summary on-demand | detail |
+| Grok Bot | percent | `GetSandUsageStatus` | detail |
 
-```jsonc
-{
-  "billingCycleStart": "1768399334000",   // unix ms (string)
-  "billingCycleEnd": "1771077734000",
-  "planUsage": {
-    "totalSpend": 23222,                  // cents — includedSpend + bonusSpend
-    "includedSpend": 23222,               // cents — counted against plan limit
-    "bonusSpend": 0,                      // cents — free credits from model providers
-    "remaining": 16778,                   // cents — limit minus includedSpend
-    "limit": 40000,                       // cents — plan included amount
-    "remainingBonus": false,              // true when bonus credits still available
-    "bonusTooltip": "...",
-    "autoPercentUsed": 0,                 // auto-mode usage %
-    "apiPercentUsed": 46.444,             // API/manual usage %
-    "totalPercentUsed": 15.48             // combined %
-  },
-  "spendLimitUsage": {                    // on-demand budget (after plan exhausted)
-    "totalSpend": 0,                      // cents
-    "pooledLimit": 50000,                 // cents — team pool (team plans only, optional)
-    "pooledUsed": 0,
-    "pooledRemaining": 50000,
-    "individualLimit": 10000,             // cents — per-user cap
-    "individualUsed": 0,
-    "individualRemaining": 10000,
-    "limitType": "user"                   // "user" | "team"
-  },
-  "displayThreshold": 200,               // basis points
-  "enabled": true,
-  "displayMessage": "You've used 46% of your usage limit",
-  "autoModelSelectedDisplayMessage": "...",
-  "namedModelSelectedDisplayMessage": "..."
-}
-```
+Fallback to request-based usage is used for team, enterprise, and plans without a usable limit, as in the macOS app.
 
-### POST /aiserver.v1.DashboardService/GetPlanInfo
+## Not ported
 
-Returns plan name, price, and included amount.
-
-#### Headers
-
-Same as above.
-
-#### Request
-
-```json
-{}
-```
-
-#### Response
-
-```json
-{
-  "planInfo": {
-    "planName": "Ultra",
-    "includedAmountCents": 40000,
-    "price": "$200/mo",
-    "billingCycleEnd": "1771077734000"
-  }
-}
-```
-
-### POST /aiserver.v1.DashboardService/GetUsageLimitPolicyStatus
-
-Returns whether user is in slow pool, feature gates, and allowed models. Response undocumented.
-
-### POST /aiserver.v1.DashboardService/GetUsageLimitStatusAndActiveGrants
-
-Returns limit policy status plus any active credit grants. Response undocumented.
-
-### GET /api/auth/stripe
-
-Returns subscription and Stripe customer balance metadata from `cursor.com`.
-
-#### Headers
-
-| Header | Required | Value |
-|---|---|---|
-| Cookie | yes | `WorkosCursorSessionToken=<userId>%3A%3A<access_token>` |
-
-#### Response (partial)
-
-```json
-{
-  "membershipType": "ultra",
-  "subscriptionStatus": "active",
-  "customerBalance": -123456
-}
-```
-
-`customerBalance` is in cents. Negative means customer credit/prepaid balance.
-
-## Authentication
-
-### Token Sources
-
-OpenUsage reads Cursor auth in this order:
-
-1. **Cursor Desktop SQLite** (preferred)
-2. **Cursor CLI keychain** (fallback)
-
-#### 1) Cursor Desktop SQLite (preferred)
-
-Path: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
-
-```bash
-sqlite3 ~/Library/Application\ Support/Cursor/User/globalStorage/state.vscdb \
-  "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'"
-```
-
-| Key | Description |
-|---|---|
-| `cursorAuth/accessToken` | JWT bearer token |
-| `cursorAuth/refreshToken` | Token refresh credential |
-| `cursorAuth/cachedEmail` | Account email |
-| `cursorAuth/stripeMembershipType` | Plan tier (e.g. `pro`, `ultra`) |
-| `cursorAuth/stripeSubscriptionStatus` | Subscription status |
-
-#### 2) Cursor CLI keychain (fallback)
-
-OpenUsage reads Cursor CLI tokens from keychain:
-
-- `cursor-access-token`
-- `cursor-refresh-token`
-
-To initialize CLI auth:
-
-```bash
-agent login
-```
-
-### Token Refresh
-
-Access tokens are short-lived JWTs. The app refreshes before each request if expired, then persists the new access token back to the same source it was loaded from (SQLite or keychain).
-
-```
-POST https://api2.cursor.sh/oauth/token
-Content-Type: application/json
-```
-
-```json
-{
-  "grant_type": "refresh_token",
-  "client_id": "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB",
-  "refresh_token": "<refresh_token>"
-}
-```
-
-**Success:**
-
-```json
-{
-  "access_token": "<new_jwt>",
-  "id_token": "<id_token>",
-  "shouldLogout": false
-}
-```
-
-**Invalid/expired token:**
-
-```json
-{
-  "access_token": "",
-  "id_token": "",
-  "shouldLogout": true
-}
-```
-
-When `shouldLogout` is `true`, the refresh token is invalid and the user must re-authenticate via Cursor.
-
-### Session Cookie (for `cursor.com` endpoints)
-
-Some web endpoints (for example `/api/auth/stripe` and enterprise `/api/usage`) use a session cookie instead of bearer auth:
-
-```
-WorkosCursorSessionToken=<userId>%3A%3A<access_token>
-```
-
-`userId` is derived from JWT `sub` (e.g. `google-oauth2|user_abc` -> `user_abc`).
+- Unified (merged Cursor, X, Grok) accounts: `usage-status`, `GetComplatCreditBalance`.
+- Usage events history: `get-filtered-usage-events` is paged; skipped.
+- Rate-limit and plan read caching: every probe reads fresh.

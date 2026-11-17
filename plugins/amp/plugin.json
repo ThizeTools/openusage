@@ -6,9 +6,18 @@
   "entry": "plugin.js",
   "icon": "icon.svg",
   "brandColor": "#F34E3F",
+  "auth": {
+    "kind": "device",
+    "deviceUrl": "https://authapi.ampcode.com/user_management/authorize/device",
+    "tokenUrl": "https://authapi.ampcode.com/user_management/authenticate",
+    "clientId": "client_01JNSEYM3V0J5AXK4YXNXRXTGP",
+    "encoding": "form",
+    "verificationUrl": "https://ampcode.com/auth/cli/device?user_code={user_code}"
+  },
   "lines": [
-    { "type": "progress", "label": "Free", "scope": "overview", "primaryOrder": 1 },
-    { "type": "text", "label": "Bonus", "scope": "detail" },
+    { "type": "progress", "label": "Agent Usage", "scope": "overview", "primaryOrder": 1 },
+    { "type": "progress", "label": "Amp Free", "scope": "overview", "primaryOrder": 2 },
+    { "type": "progress", "label": "Orb Hours", "scope": "detail" },
     { "type": "text", "label": "Credits", "scope": "overview" }
   ]
 }

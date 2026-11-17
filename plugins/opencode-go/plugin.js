@@ -1,287 +1,311 @@
 (function () {
   const PROVIDER_ID = "opencode-go";
-  const AUTH_PATH = "~/.local/share/opencode/auth.json";
-  const DB_PATH = "~/.local/share/opencode/opencode.db";
-  const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+  const CLIENT_ID = "opencode-cli";
+  const TOKEN_URL = "https://opencode.ai/console/auth/device/token";
+  const USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
+  const GO_STATUS_URL = "https://opencode.ai/console/api/go/status";
+  const USER_URL = "https://opencode.ai/console/api/user";
+  const SIGN_IN_AGAIN = "Sign in again in Settings → Accounts.";
+  const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+  const SESSION_MS = 5 * 60 * 60 * 1000;
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-  const LIMITS = {
-    session: 12,
-    weekly: 30,
-    monthly: 60,
-  };
+  const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
+  const PLACEHOLDER_TOLERANCE_MS = 2000;
+  const RENEWAL_REFUSED = [
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+  ];
 
-  const HISTORY_EXISTS_SQL = `
-    SELECT 1 AS present
-    FROM message
-    WHERE json_valid(data)
-      AND json_extract(data, '$.providerID') = 'opencode-go'
-      AND json_extract(data, '$.role') = 'assistant'
-      AND json_type(data, '$.cost') IN ('integer', 'real')
-    LIMIT 1
-  `;
-
-  const HISTORY_ROWS_SQL = `
-    SELECT
-      CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
-      CAST(json_extract(data, '$.cost') AS REAL) AS cost
-    FROM message
-    WHERE json_valid(data)
-      AND json_extract(data, '$.providerID') = 'opencode-go'
-      AND json_extract(data, '$.role') = 'assistant'
-      AND json_type(data, '$.cost') IN ('integer', 'real')
-  `;
-
-  function readNumber(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
+  function numberOf(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
   }
 
-  function readNowMs() {
-    return Date.now();
+  function clampPercent(value) {
+    return Math.min(Math.max(value, 0), 100);
   }
 
-  function clampPercent(used, limit) {
-    if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0)
-      return 0;
-    const percent = (used / limit) * 100;
-    if (!Number.isFinite(percent)) return 0;
-    return Math.round(Math.max(0, Math.min(100, percent)) * 10) / 10;
+  function formEncode(fields) {
+    return Object.keys(fields)
+      .map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(fields[k]))
+      .join("&");
   }
 
-  function toIso(ms) {
-    if (!Number.isFinite(ms)) return null;
-    return new Date(ms).toISOString();
+  function bearerHeaders(token) {
+    return { Authorization: "Bearer " + token, Accept: "application/json" };
   }
 
-  function startOfUtcWeek(nowMs) {
-    const date = new Date(nowMs);
-    const offset = (date.getUTCDay() + 6) % 7;
-    date.setUTCDate(date.getUTCDate() - offset);
-    date.setUTCHours(0, 0, 0, 0);
-    return date.getTime();
+  function withOrg(headers, name, orgId) {
+    if (orgId) headers[name] = orgId;
+    return headers;
   }
 
-  function startOfUtcMonth(nowMs) {
-    const date = new Date(nowMs);
-    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 0, 0, 0, 0);
+  function errorCode(body) {
+    if (!body) return null;
+    if (typeof body.error === "string") return body.error;
+    if (body.error && typeof body.error.code === "string") return body.error.code;
+    return typeof body.code === "string" ? body.code : null;
   }
 
-  function startOfNextUtcMonth(nowMs) {
-    const date = new Date(nowMs);
-    return Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth() + 1,
-      1,
-      0,
-      0,
-      0,
-      0,
+  function errorType(resp, ctx) {
+    const body = ctx.util.tryParseJson(resp.bodyText);
+    return body && body.error && typeof body.error.type === "string" ? body.error.type : null;
+  }
+
+  function planName(product) {
+    if (product === "go") return "Go";
+    if (product === "go-plus") return "Go Plus";
+    if (product === "go-teams") return "Go Teams";
+    return null;
+  }
+
+  function readCredentials(ctx) {
+    const creds = ctx.account && ctx.account.credentials;
+    if (!creds || typeof creds.access_token !== "string" || !creds.access_token) {
+      throw SIGN_IN_AGAIN;
+    }
+    return creds;
+  }
+
+  function needsRefresh(creds, nowMs) {
+    return (
+      typeof creds.refresh_token === "string" &&
+      creds.refresh_token !== "" &&
+      Number.isFinite(creds.expiresAt) &&
+      creds.expiresAt <= nowMs + REFRESH_MARGIN_MS
     );
   }
 
-  function shiftMonth(year, month, delta) {
-    const total = year * 12 + month + delta;
-    return [Math.floor(total / 12), ((total % 12) + 12) % 12];
-  }
+  // Renews through the refresh token, saves the merged credentials and
+  // returns the new access token. Returns null when there is no refresh token.
+  function renew(ctx, state) {
+    const creds = state.creds;
+    if (typeof creds.refresh_token !== "string" || creds.refresh_token === "") return null;
 
-  function anchorMonth(year, month, anchorDate) {
-    const maxDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-    return Date.UTC(
-      year,
-      month,
-      Math.min(anchorDate.getUTCDate(), maxDay),
-      anchorDate.getUTCHours(),
-      anchorDate.getUTCMinutes(),
-      anchorDate.getUTCSeconds(),
-      anchorDate.getUTCMilliseconds(),
-    );
-  }
-
-  function anchoredMonthBounds(nowMs, anchorMs) {
-    if (!Number.isFinite(anchorMs)) {
-      const startMs = startOfUtcMonth(nowMs);
-      return { startMs, endMs: startOfNextUtcMonth(nowMs) };
-    }
-
-    const nowDate = new Date(nowMs);
-    const anchorDate = new Date(anchorMs);
-    let year = nowDate.getUTCFullYear();
-    let month = nowDate.getUTCMonth();
-    let startMs = anchorMonth(year, month, anchorDate);
-
-    if (startMs > nowMs) {
-      const previous = shiftMonth(year, month, -1);
-      year = previous[0];
-      month = previous[1];
-      startMs = anchorMonth(year, month, anchorDate);
-    }
-
-    const next = shiftMonth(year, month, 1);
-    return {
-      startMs,
-      endMs: anchorMonth(next[0], next[1], anchorDate),
-    };
-  }
-
-  function sumRange(rows, startMs, endMs) {
-    let total = 0;
-    for (let i = 0; i < rows.length; i += 1) {
-      const row = rows[i];
-      if (row.createdMs < startMs || row.createdMs >= endMs) continue;
-      total += row.cost;
-    }
-    return Math.round(total * 10000) / 10000;
-  }
-
-  function nextRollingReset(rows, nowMs) {
-    const startMs = nowMs - FIVE_HOURS_MS;
-    let oldest = null;
-    for (let i = 0; i < rows.length; i += 1) {
-      const row = rows[i];
-      if (row.createdMs < startMs || row.createdMs >= nowMs) continue;
-      if (oldest === null || row.createdMs < oldest) oldest = row.createdMs;
-    }
-    return toIso((oldest === null ? nowMs : oldest) + FIVE_HOURS_MS);
-  }
-
-  function queryRows(ctx, sql) {
+    let resp;
     try {
-      const raw = ctx.host.sqlite.query(DB_PATH, sql);
-      const rows = Array.isArray(raw) ? raw : ctx.util.tryParseJson(raw);
-      if (!Array.isArray(rows)) {
-        ctx.host.log.warn("sqlite query returned non-array result");
-        return { ok: false, rows: [] };
-      }
-      return { ok: true, rows };
+      resp = ctx.util.request({
+        method: "POST",
+        url: TOKEN_URL,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        bodyText: formEncode({
+          client_id: CLIENT_ID,
+          grant_type: "refresh_token",
+          refresh_token: creds.refresh_token,
+        }),
+        timeoutMs: 10000,
+      });
     } catch (e) {
-      ctx.host.log.warn("sqlite query failed: " + String(e));
-      return { ok: false, rows: [] };
-    }
-  }
-
-  function loadAuthKey(ctx) {
-    if (!ctx.host.fs.exists(AUTH_PATH)) return null;
-
-    try {
-      const text = ctx.host.fs.readText(AUTH_PATH);
-      const parsed = ctx.util.tryParseJson(text);
-      if (!parsed || typeof parsed !== "object") {
-        ctx.host.log.warn("opencode auth file is not valid json");
-        return null;
-      }
-      const entry = parsed[PROVIDER_ID];
-      if (!entry || typeof entry !== "object") return null;
-      const key = typeof entry.key === "string" ? entry.key.trim() : "";
-      return key || null;
-    } catch (e) {
-      ctx.host.log.warn("opencode auth read failed: " + String(e));
-      return null;
-    }
-  }
-
-  function hasHistory(ctx) {
-    const result = queryRows(ctx, HISTORY_EXISTS_SQL);
-    if (!result.ok) return { ok: false, present: false };
-    return { ok: true, present: result.rows.length > 0 };
-  }
-
-  function loadHistory(ctx) {
-    const result = queryRows(ctx, HISTORY_ROWS_SQL);
-    if (!result.ok) return result;
-
-    const rows = [];
-    for (let i = 0; i < result.rows.length; i += 1) {
-      const row = result.rows[i];
-      if (!row || typeof row !== "object") continue;
-      const createdMs = readNumber(row.createdMs);
-      const cost = readNumber(row.cost);
-      if (createdMs === null || createdMs <= 0) continue;
-      if (cost === null || cost < 0) continue;
-      rows.push({ createdMs, cost });
+      ctx.host.log.error("sign-in renewal request failed: " + String(e));
+      throw "Sign-in renewal failed. Check your connection.";
     }
 
-    return { ok: true, rows };
+    const body = ctx.util.tryParseJson(resp.bodyText);
+    if (
+      [400, 401, 403].indexOf(resp.status) !== -1 &&
+      RENEWAL_REFUSED.indexOf(errorCode(body)) !== -1
+    ) {
+      ctx.host.log.warn("sign-in renewal refused: " + errorCode(body));
+      throw SIGN_IN_AGAIN;
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+      throw "Sign-in renewal failed (HTTP " + resp.status + "). Try again later.";
+    }
+    if (!body || typeof body.access_token !== "string" || !body.access_token) {
+      throw "Sign-in renewal returned an invalid response. Try again later.";
+    }
+
+    const nowMs = Date.now();
+    const merged = Object.assign({}, creds, body);
+    if (typeof body.expires_in === "number") {
+      merged.expiresAt = nowMs + body.expires_in * 1000;
+    } else {
+      delete merged.expiresAt;
+    }
+    merged.obtainedAt = nowMs;
+
+    if (ctx.account.saveCredentials(JSON.stringify(merged)) === false) {
+      ctx.host.log.error("could not save renewed sign-in; the next refresh renews again");
+    }
+    state.creds = merged;
+    return merged.access_token;
   }
 
-  function buildProgressLines(ctx, rows, nowMs) {
-    const sessionStartMs = nowMs - FIVE_HOURS_MS;
-    const weeklyStartMs = startOfUtcWeek(nowMs);
-    const weeklyEndMs = weeklyStartMs + WEEK_MS;
-    let earliestMs = null;
-    for (let i = 0; i < rows.length; i += 1) {
-      const createdMs = rows[i].createdMs;
-      if (!Number.isFinite(createdMs)) continue;
-      if (earliestMs === null || createdMs < earliestMs) earliestMs = createdMs;
-    }
-    const monthBounds = anchoredMonthBounds(nowMs, earliestMs);
-    const monthlyStartMs = monthBounds.startMs;
-    const monthlyEndMs = monthBounds.endMs;
+  function readWindow(ctx, raw) {
+    const percent = raw && typeof raw === "object" ? numberOf(raw.percent) : null;
+    const iso = raw && typeof raw.resetsAt === "string" ? ctx.util.toIso(raw.resetsAt) : null;
+    if (percent === null || !iso) throw "Usage response invalid. Try again later.";
+    return { used: clampPercent(percent), resetMs: Date.parse(iso), iso: iso };
+  }
 
-    const sessionCost = sumRange(rows, sessionStartMs, nowMs);
-    const weeklyCost = sumRange(rows, weeklyStartMs, weeklyEndMs);
-    const monthlyCost = sumRange(rows, monthlyStartMs, monthlyEndMs);
+  function capturedMs(resp) {
+    const headers = resp.headers || {};
+    const date = headers.date || headers.Date;
+    const ms = date ? Date.parse(date) : NaN;
+    return Number.isFinite(ms) ? ms : Date.now();
+  }
+
+  function usageLines(ctx, body, capturedAt) {
+    const usage = body && body.usage;
+    if (!usage || typeof usage !== "object") throw "Usage response invalid. Try again later.";
+    const session = readWindow(ctx, usage.rolling);
+    const weekly = readWindow(ctx, usage.weekly);
+    const monthly = readWindow(ctx, usage.monthly);
+
+    // An untouched rolling window reports reset = now + 5h; that is a
+    // placeholder, not a real reset, so the Session row shows no reset.
+    const placeholder =
+      session.used === 0 &&
+      Math.abs(session.resetMs - capturedAt - SESSION_MS) <= PLACEHOLDER_TOLERANCE_MS;
 
     return [
       ctx.line.progress({
         label: "Session",
-        used: clampPercent(sessionCost, LIMITS.session),
+        used: session.used,
         limit: 100,
         format: { kind: "percent" },
-        resetsAt: nextRollingReset(rows, nowMs),
-        periodDurationMs: FIVE_HOURS_MS,
+        resetsAt: placeholder ? null : session.iso,
+        periodDurationMs: SESSION_MS,
       }),
       ctx.line.progress({
         label: "Weekly",
-        used: clampPercent(weeklyCost, LIMITS.weekly),
+        used: weekly.used,
         limit: 100,
         format: { kind: "percent" },
-        resetsAt: toIso(weeklyEndMs),
+        resetsAt: weekly.iso,
         periodDurationMs: WEEK_MS,
       }),
       ctx.line.progress({
         label: "Monthly",
-        used: clampPercent(monthlyCost, LIMITS.monthly),
+        used: monthly.used,
         limit: 100,
         format: { kind: "percent" },
-        resetsAt: toIso(monthlyEndMs),
-        periodDurationMs: monthlyEndMs - monthlyStartMs,
+        resetsAt: monthly.iso,
+        periodDurationMs: MONTH_MS,
       }),
     ];
   }
 
-  function buildSoftEmptyLines(ctx) {
-    return [
-      ctx.line.badge({
-        label: "Status",
-        text: "No usage data",
-        color: "#a3a3a3",
-      }),
-    ];
+  function fetchUsage(ctx, state) {
+    try {
+      return ctx.util.request({
+        method: "GET",
+        url: USAGE_URL,
+        headers: withOrg(
+          bearerHeaders(state.creds.access_token),
+          "x-opencode-org-id",
+          state.creds.org_id,
+        ),
+        timeoutMs: 10000,
+      });
+    } catch (e) {
+      ctx.host.log.error("usage request failed: " + String(e));
+      throw "Usage request failed. Check your connection.";
+    }
+  }
+
+  // Soft lookup: the account name only. A failure is logged and skipped.
+  function applyLabel(ctx, creds) {
+    try {
+      const resp = ctx.util.request({
+        method: "GET",
+        url: USER_URL,
+        headers: withOrg(bearerHeaders(creds.access_token), "x-org-id", creds.org_id),
+        timeoutMs: 10000,
+      });
+      if (resp.status < 200 || resp.status >= 300) {
+        ctx.host.log.warn("account lookup failed: HTTP " + resp.status);
+        return;
+      }
+      const body = ctx.util.tryParseJson(resp.bodyText);
+      const email = body && typeof body.email === "string" ? body.email.trim() : "";
+      if (email) ctx.account.setLabel(email);
+    } catch (e) {
+      ctx.host.log.warn("account lookup failed: " + String(e));
+    }
+  }
+
+  // Soft lookup: the plan name. A failure is logged and the plan is left out.
+  function fetchPlan(ctx, creds) {
+    try {
+      const resp = ctx.util.request({
+        method: "GET",
+        url: GO_STATUS_URL,
+        headers: withOrg(bearerHeaders(creds.access_token), "x-org-id", creds.org_id),
+        timeoutMs: 10000,
+      });
+      if (resp.status < 200 || resp.status >= 300) {
+        ctx.host.log.warn("plan lookup failed: HTTP " + resp.status);
+        return null;
+      }
+      const body = ctx.util.tryParseJson(resp.bodyText);
+      const plan = planName(body && body.product);
+      if (!plan) ctx.host.log.warn("plan lookup: unknown product");
+      return plan;
+    } catch (e) {
+      ctx.host.log.warn("plan lookup failed: " + String(e));
+      return null;
+    }
   }
 
   function probe(ctx) {
-    const authKey = loadAuthKey(ctx);
-    const history = hasHistory(ctx);
-    const detected = !!authKey || (history.ok && history.present);
+    const state = { creds: readCredentials(ctx) };
 
-    if (!detected) {
-      throw "OpenCode Go not detected. Log in with OpenCode Go or use it locally first.";
+    if (needsRefresh(state.creds, Date.now())) {
+      try {
+        renew(ctx, state);
+      } catch (e) {
+        // Early renewal: keep the current token while it is still valid.
+        if (state.creds.expiresAt > Date.now()) {
+          ctx.host.log.warn("early renewal failed; keeping current token: " + String(e));
+        } else {
+          throw e;
+        }
+      }
     }
 
-    if (!history.ok) {
-      return { plan: "Go", lines: buildSoftEmptyLines(ctx) };
+    // Renews once on 401/403 through the refresh token, then retries.
+    const resp = ctx.util.retryOnceOnAuth({
+      request: function () {
+        return fetchUsage(ctx, state);
+      },
+      refresh: function () {
+        return renew(ctx, state);
+      },
+    });
+
+    applyLabel(ctx, state.creds);
+
+    if (resp.status === 403 && errorType(resp, ctx) === "EntitlementError") {
+      return {
+        lines: [
+          ctx.line.badge({
+            label: "Status",
+            text: "No OpenCode Go subscription on this account.",
+            color: "#a3a3a3",
+          }),
+        ],
+      };
+    }
+    if (ctx.util.isAuthStatus(resp.status)) throw SIGN_IN_AGAIN;
+    if (resp.status < 200 || resp.status >= 300) {
+      throw "Usage request failed (HTTP " + resp.status + "). Try again later.";
     }
 
-    const rowsResult = loadHistory(ctx);
-    if (!rowsResult.ok) {
-      return { plan: "Go", lines: buildSoftEmptyLines(ctx) };
-    }
-
-    return {
-      plan: "Go",
-      lines: buildProgressLines(ctx, rowsResult.rows, readNowMs()),
-    };
+    const body = ctx.util.tryParseJson(resp.bodyText);
+    const lines = usageLines(ctx, body, capturedMs(resp));
+    const plan = fetchPlan(ctx, state.creds);
+    return plan ? { plan: plan, lines: lines } : { lines: lines };
   }
 
-  globalThis.__openusage_plugin = { id: PROVIDER_ID, probe };
+  globalThis.__openusage_plugin = { id: PROVIDER_ID, probe: probe };
 })();

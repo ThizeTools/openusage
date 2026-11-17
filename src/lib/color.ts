@@ -15,3 +15,12 @@ export function getRelativeLuminance(hex: string): number {
   const b = parseInt(h.slice(4, 6), 16) / 255
   return 0.2126 * sRGBtoLinear(r) + 0.7152 * sRGBtoLinear(g) + 0.0722 * sRGBtoLinear(b)
 }
+
+/** Tint for a provider icon: brand color, or contrast-safe fallback for the theme. */
+export function getIconColor(brandColor: string | undefined, isDark: boolean): string {
+  if (!brandColor) return "currentColor"
+  const luminance = getRelativeLuminance(brandColor)
+  if (isDark && luminance < 0.15) return "#ffffff"
+  if (!isDark && luminance > 0.85) return "currentColor"
+  return brandColor
+}

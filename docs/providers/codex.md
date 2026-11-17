@@ -1,119 +1,55 @@
-# Codex
+# ChatGPT (Codex)
 
-> Reverse-engineered, undocumented API. May change without notice.
+> Undocumented API. May change without notice.
 
-## Overview
+## Sign-in
 
-- **Protocol:** REST (plain JSON)
-- **Base URL:** `https://chatgpt.com`
-- **Auth provider:** `auth.openai.com` (OAuth 2.0)
-- **Client ID:** `app_EMoamEEZ73f0CkXaXp7hrann`
-- **Percentages:** integers (0-100)
-- **Timestamps:** unix seconds
-- **Window durations:** seconds (18000 = 5h, 604800 = 7d)
+Settings → Accounts → Add → ChatGPT. OAuth 2.0 authorization code + PKCE with a loopback redirect on fixed port `1455`, path `/auth/callback`. The device-code fallback is not used. The app stores the token response; the plugin never reads Codex CLI's files or keychain.
 
-## Endpoints
+- Authorize: `https://auth.openai.com/oauth/authorize` (extra params `id_token_add_organizations=true`, `codex_cli_simplified_flow=true`, `originator=pi`)
+- Token: `POST https://auth.openai.com/oauth/token`, form body
+- Scopes: `openid profile email offline_access`
+- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
 
-### GET /backend-api/wham/usage
+## Identity
 
-Returns rate limit windows and optional credits.
+- Label: `email` claim of `id_token`.
+- `ChatGPT-Account-Id` header: `chatgpt_account_id` from the `https://api.openai.com/auth` claim of `access_token`.
 
-#### Headers
+## Refresh
 
-| Header | Required | Value |
-|---|---|---|
-| Authorization | yes | `Bearer <access_token>` |
-| Accept | yes | `application/json` |
-| ChatGPT-Account-Id | no | `<account_id>` |
-
-#### Response
-
-```jsonc
-{
-  "plan_type": "plus",                     // plan tier
-  "rate_limit": {
-    "primary_window": {
-      "used_percent": 6,                   // % used in 5h rolling window
-      "reset_at": 1738300000,              // unix seconds
-      "limit_window_seconds": 18000        // 5 hours
-    },
-    "secondary_window": {
-      "used_percent": 24,                  // % used in 7-day window
-      "reset_at": 1738900000,
-      "limit_window_seconds": 604800       // 7 days
-    }
-  },
-  "code_review_rate_limit": {              // separate weekly code review limit (optional)
-    "primary_window": {
-      "used_percent": 0,
-      "reset_at": 1738900000,
-      "limit_window_seconds": 604800
-    }
-  },
-  "credits": {                             // purchased credits (optional)
-    "has_credits": true,
-    "unlimited": false,
-    "balance": 5.39                        // remaining balance
-  }
-}
-```
-
-Both rate_limit windows are enforced simultaneously — hitting either limit throttles the user.
-
-## Authentication
-
-### Credential Storage Locations
-
-Codex CLI supports multiple credential storage modes:
-
-- **file** (default): `CODEX_HOME/auth.json` (or `~/.codex/auth.json` by default)
-- **keyring**: OS keychain/credential manager entry (service name `Codex Auth`)
-- **auto**: keyring first, fallback to file
-- **ephemeral**: memory-only (no persistence)
-
-For `keyring`/`auto`, Codex may not keep `auth.json` on disk. If keyring save succeeds, Codex removes the fallback `auth.json`.
-
-OpenUsage Codex plugin auth lookup order:
-
-1. `CODEX_HOME/auth.json` (when `CODEX_HOME` is set)
-2. `~/.config/codex/auth.json`
-3. `~/.codex/auth.json`
-4. macOS keychain service `Codex Auth` (fallback)
-
-If file-based OAuth credentials are missing, invalid, or fail with an auth/session error during refresh or usage lookup, OpenUsage tries the macOS keychain fallback. Non-auth usage failures, such as server errors or invalid responses, are shown directly.
-
-Keychain fallback is available on macOS only.
-
-Expected auth payload shape (file or keychain JSON value):
-
-```jsonc
-{
-  "OPENAI_API_KEY": null,                  // legacy API key field
-  "tokens": {
-    "access_token": "<jwt>",               // OAuth access token (Bearer)
-    "refresh_token": "<token>",
-    "id_token": "<jwt>",                   // OpenID Connect ID token
-    "account_id": "<uuid>"                 // sent as ChatGPT-Account-Id header
-  },
-  "last_refresh": "2026-01-28T08:05:37Z"  // ISO 8601
-}
-```
-
-> Note: Codex also stores MCP OAuth tokens in `~/.codex/.credentials.json` (or keyring), but that is separate from ChatGPT CLI auth used by this plugin.
-
-### Token Refresh
-
-Access tokens are short-lived JWTs. Refreshed when `last_refresh` is older than 8 days, or on 401/403.
+Proactive ~5 min before `expiresAt`, and once on 401/403.
 
 ```
 POST https://auth.openai.com/oauth/token
 Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&client_id=app_EMoamEEZ73f0CkXaXp7hrann&refresh_token=…
 ```
 
-```
-grant_type=refresh_token
-&client_id=app_EMoamEEZ73f0CkXaXp7hrann
-&refresh_token=<refresh_token>
-```
+The merged response is saved; `expiresAt` = now + `expires_in`, or the access token's `exp` when `expires_in` is absent.
 
-Response returns new `access_token`, and optionally new `refresh_token` and `id_token`.
+## Endpoints
+
+### GET https://chatgpt.com/backend-api/wham/usage
+
+Headers: `Authorization: Bearer <access_token>`, `Accept: application/json`, `User-Agent: OpenUsage`, `ChatGPT-Account-Id` (when present).
+
+Used: `plan_type`, `rate_limit.primary_window` / `secondary_window` (matched by `limit_window_seconds`, with `x-codex-*-used-percent` headers as fallback), `additional_rate_limits[]` entry whose `limit_name` or `metered_feature` contains "spark", `credits` (`has_credits`, `balance`), `spend_control.individual_limit`.
+
+## Metrics
+
+| Line | Source | Notes |
+|---|---|---|
+| Session | `rate_limit` 5h window | percent (overview) |
+| Weekly | `rate_limit` 7d window | percent (overview) |
+| Spark | Spark entry, 5h window | percent (detail) |
+| Spark Weekly | Spark entry, 7d window | percent (detail) |
+| Extra Usage | `credits.balance` | text: dollars at $0.04 per credit, subtitle = credit count |
+| Credit Limit | `spend_control.individual_limit` | count of credits, with reset time |
+
+Plan: `plan_type` mapped (`prolite` → Pro 100, `pro` → Pro 200, `promax` → Pro 500, `self_serve_business_prolite` → Business Premium, else title-cased).
+
+## Not included
+
+Rate-limit reset credits (read and consume), the code-review limit, the Reviews line, the Today / Yesterday / Last 30 Days history (`wham/analytics/*` and `wham/usage/*` reports) and the usage trend chart.

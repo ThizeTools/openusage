@@ -245,6 +245,13 @@ pub fn cache_successful_output(output: &PluginOutput) {
     schedule_cache_flush_locked(&mut state);
 }
 
+pub fn cached_snapshots() -> Vec<CachedPluginSnapshot> {
+    let state = cache_state().lock().expect("cache state poisoned");
+    let mut snapshots: Vec<_> = state.snapshots.values().cloned().collect();
+    snapshots.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+    snapshots
+}
+
 pub fn flush_cache() {
     if let CacheFlushResult::Failed(e) = flush_pending_cache_once() {
         log::warn!("{}", e);
@@ -495,6 +502,27 @@ mod tests {
 
         wait_for_cache_writer_idle();
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[serial]
+    fn cached_snapshots_returns_current_results_in_stable_order() {
+        let dir = temp_dir("cached-snapshots");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        init(&dir, vec!["codex".to_string(), "claude".to_string()]);
+        cache_successful_output(&make_output("codex", "Codex"));
+        cache_successful_output(&make_output("claude", "Claude"));
+
+        let snapshots = cached_snapshots();
+        let ids: Vec<_> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.provider_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["claude", "codex"]);
+
+        wait_for_cache_writer_idle();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

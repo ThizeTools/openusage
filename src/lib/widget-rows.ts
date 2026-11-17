@@ -1,24 +1,17 @@
-import type { PluginMeta } from "@/lib/plugin-types"
+import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
-import {
-  WIDGET_METRIC_ALL,
-  WIDGET_METRIC_MOST_USED,
-  WIDGET_METRIC_SUGESTAO,
-  type PluginSettings,
-  type WidgetMetric,
-  type WidgetProviderIds,
-} from "@/lib/settings"
-import { getTrayPrimaryBars, type TrayPrimaryBar } from "@/lib/tray-primary-progress"
+import type { PluginSettings, WidgetProviderIds, WidgetProviderMetrics } from "@/lib/settings"
+import { expectedFractionForLine, type ProgressLine } from "@/lib/tray-primary-progress"
+import { clamp01 } from "@/lib/utils"
 
 /** Pace tone, mirroring the tray icon tint. */
 export type WidgetTone = "ahead" | "on-track" | "behind" | "neutral"
 
-/** One labeled metric value, used by the "most used" / "all" widget modes. */
+/** One labeled metric value shown in a widget row. */
 export type WidgetRowMetric = {
   label: string
   fraction: number
   expectedFraction?: number | null
-  hidePercentSign?: boolean
   tone: WidgetTone
 }
 
@@ -27,16 +20,13 @@ export type WidgetRow = {
   name: string
   iconUrl: string
   brandColor?: string
-  /** Used 0..1 fraction of the shown metric. null when no data. */
+  /** Used 0..1 fraction of the first shown metric. null when no data. */
   fraction: number | null
-  /** Expected 0..1 fraction of the shown metric pace. */
+  /** Expected 0..1 fraction of the first shown metric pace. */
   expectedFraction?: number | null
   /** Color tone derived from pace; "neutral" when unknown. */
   tone: WidgetTone
-  /**
-   * Labeled metric values for the "most used" / "all" pseudo-metrics; absent in
-   * the single-metric modes (Auto / a specific label).
-   */
+  /** Selected metrics that have data, in the plugin's line order. */
   metrics?: WidgetRowMetric[]
   /**
    * When ANY of the provider's limits is reached (even one not shown, e.g. the
@@ -46,30 +36,59 @@ export type WidgetRow = {
   limitedUntilMs?: number
 }
 
-// Same primary metric the tray icon shows: weekly/total, never the 5h session.
-const WIDGET_PRIMARY_USAGE_LABELS = ["Weekly", "Weekly quota", "Total usage"]
+/** Suggested metrics per base plugin id (account suffix removed), in widget order. */
+const SUGESTAO_LABELS_BY_PROVIDER: Record<string, string[] | undefined> = {
+  claude: ["Session", "Weekly"],
+  codex: ["Session", "Weekly", "Spark", "Spark Weekly"],
+  cursor: ["Total Usage"],
+}
+
+/** Plugin id without its account suffix: "claude@1a2b3c4d" -> "claude". */
+function getBaseProviderId(id: string): string {
+  return id.split("@")[0]
+}
 
 /**
- * Distinct progress-metric labels across the enabled widget providers, in order
- * of first appearance. Feeds the "which metric" picker in Settings.
+ * Progress labels declared by the plugin manifest, in manifest order, without
+ * duplicates. Feeds the per-provider metric checkboxes in Settings.
  */
-export function getAvailableWidgetMetrics(
-  pluginsMeta: PluginMeta[],
-  enabledIds: string[]
-): string[] {
-  const enabled = new Set(enabledIds)
+export function getProviderMetricOptions(meta: PluginMeta): string[] {
   const labels: string[] = []
-  const seen = new Set<string>()
-  for (const meta of pluginsMeta) {
-    if (!enabled.has(meta.id)) continue
-    for (const line of meta.lines) {
-      if (line.type !== "progress") continue
-      if (seen.has(line.label)) continue
-      seen.add(line.label)
-      labels.push(line.label)
-    }
+  for (const line of meta.lines) {
+    if (line.type !== "progress" || labels.includes(line.label)) continue
+    labels.push(line.label)
   }
   return labels
+}
+
+function findProgressLine(output: PluginOutput, label: string): ProgressLine | undefined {
+  return output.lines.find(
+    (line): line is ProgressLine => line.type === "progress" && line.label === label
+  )
+}
+
+function hasSparkUsage(output: PluginOutput, label: string): boolean {
+  const line = findProgressLine(output, label)
+  return line !== undefined && line.limit > 0 && line.used > 0
+}
+
+/**
+ * Metrics shown for a provider the user has not configured. Known providers use
+ * their suggestion list; with output, Spark metrics stay out until they have
+ * usage. Other providers use their first two primary candidates.
+ */
+export function getDefaultProviderMetrics(meta: PluginMeta, output?: PluginOutput | null): string[] {
+  const suggested = SUGESTAO_LABELS_BY_PROVIDER[getBaseProviderId(meta.id)]
+  if (suggested) {
+    if (!output) return [...suggested]
+    return suggested.filter(
+      (label) => !label.toLowerCase().startsWith("spark") || hasSparkUsage(output, label)
+    )
+  }
+  // Same tolerance as tray-primary-progress: some plugin metas omit primaryCandidates.
+  const candidates = meta.primaryCandidates ?? []
+  if (candidates.length > 0) return candidates.slice(0, 2)
+  return getProviderMetricOptions(meta).slice(0, 2)
 }
 
 /** Pace tone matching the tray icon (getTrayTintColor). */
@@ -104,93 +123,48 @@ function getLimitedUntilMs(state: PluginState | undefined, nowMs: number): numbe
   return latest
 }
 
-const SUGESTAO_LABELS_BY_PROVIDER: Record<string, string[]> = {
-  claude: ["Session", "Weekly"],
-  codex: ["Session", "Weekly", "Spark", "Spark Weekly"],
-  cursor: ["Total usage"],
-}
-
-function normalizeText(value: string): string {
-  return value.trim().toLowerCase()
-}
-
-function getSugestaoLabels(id: string, name: string): string[] {
-  return SUGESTAO_LABELS_BY_PROVIDER[normalizeText(id)] ?? SUGESTAO_LABELS_BY_PROVIDER[normalizeText(name)] ?? []
-}
-
-function filterSugestaoBars(
-  id: string,
-  name: string,
-  bars: TrayPrimaryBar[]
-): Array<TrayPrimaryBar & { label: string; fraction: number }> {
-  const byLabel = new Map(
-    bars
-      .filter((bar): bar is TrayPrimaryBar & { label: string; fraction: number } =>
-        typeof bar.label === "string" && typeof bar.fraction === "number"
-      )
-      .map((bar) => [normalizeText(bar.label), bar])
-  )
-  return getSugestaoLabels(id, name)
-    .map((label) => byLabel.get(normalizeText(label)))
-    .filter((bar): bar is TrayPrimaryBar & { label: string; fraction: number } => {
-      if (!bar) return false
-      if (normalizeText(bar.label).startsWith("spark")) return (bar.used ?? 0) > 0
-      return true
+/** Selected metrics that have a limit in the output, in manifest order. */
+function buildSelectedMetrics(
+  meta: PluginMeta,
+  output: PluginOutput | null,
+  selected: string[],
+  nowMs: number
+): WidgetRowMetric[] {
+  if (!output) return []
+  const metrics: WidgetRowMetric[] = []
+  for (const label of getProviderMetricOptions(meta)) {
+    if (!selected.includes(label)) continue
+    const line = findProgressLine(output, label)
+    if (!line || !(line.limit > 0)) continue
+    const fraction = clamp01(line.used / line.limit)
+    const expectedFraction = expectedFractionForLine(line, nowMs)
+    metrics.push({
+      label,
+      fraction,
+      expectedFraction: expectedFraction ?? null,
+      tone: paceTone(fraction, expectedFraction),
     })
+  }
+  return metrics
 }
 
 /**
- * Builds one row per enabled provider for the floating widget. Each row shows
- * the used fraction for the weekly/total metric (like the tray icon), the
- * user-picked metric, the provider's most-used metric, or all of its metrics.
- * When any of the provider's limits is reached, the row carries the time it
- * becomes available again instead.
+ * Builds one row per enabled provider for the taskbar widget. Each row shows the
+ * metrics the user picked for that provider (or the default selection). A
+ * provider with an empty selection is left out. When any of the provider's
+ * limits is reached, the row carries the time it becomes available again instead.
  */
 export function buildWidgetRows(args: {
   pluginsMeta: PluginMeta[]
   pluginSettings: PluginSettings | null
   pluginStates: Record<string, PluginState | undefined>
   widgetProviderIds?: WidgetProviderIds
-  widgetMetric?: WidgetMetric
+  widgetProviderMetrics?: WidgetProviderMetrics
   nowMs?: number
 }): WidgetRow[] {
-  const { pluginsMeta, pluginSettings, pluginStates, widgetProviderIds, widgetMetric } = args
+  const { pluginsMeta, pluginSettings, pluginStates, widgetProviderIds, widgetProviderMetrics = {} } = args
   const nowMs = args.nowMs ?? Date.now()
   if (!pluginSettings) return []
-
-  const multiMode =
-    widgetMetric === WIDGET_METRIC_MOST_USED ||
-    widgetMetric === WIDGET_METRIC_ALL ||
-    widgetMetric === WIDGET_METRIC_SUGESTAO
-
-  // Single mode: one bar per provider — the picked label, or the weekly/total
-  // metric the tray icon uses. Multi mode: every metric the provider exposes.
-  const preferredLabels = multiMode
-    ? widgetMetric === WIDGET_METRIC_SUGESTAO
-      ? Array.from(new Set(Object.values(SUGESTAO_LABELS_BY_PROVIDER).flat()))
-      : getAvailableWidgetMetrics(
-          pluginsMeta,
-          pluginSettings.order.filter((id) => !pluginSettings.disabled.includes(id))
-        )
-    : widgetMetric
-      ? [widgetMetric]
-      : WIDGET_PRIMARY_USAGE_LABELS
-  const bars = getTrayPrimaryBars({
-    pluginsMeta,
-    pluginSettings,
-    pluginStates,
-    maxBars: Number.POSITIVE_INFINITY,
-    nowMs,
-    preferredLabels,
-    preferredLabelsOnly: true,
-    includeAllMatches: multiMode,
-  })
-  const barsById = new Map<string, TrayPrimaryBar[]>()
-  for (const bar of bars) {
-    const list = barsById.get(bar.id)
-    if (list) list.push(bar)
-    else barsById.set(bar.id, [bar])
-  }
 
   const metaById = new Map(pluginsMeta.map((p) => [p.id, p]))
   const disabled = new Set(pluginSettings.disabled)
@@ -204,42 +178,23 @@ export function buildWidgetRows(args: {
     if (widgetProviderSet && !widgetProviderSet.has(id)) continue
     const meta = metaById.get(id)
     if (!meta) continue
+
+    const output = pluginStates[id]?.data ?? null
+    const selected = widgetProviderMetrics[id] ?? getDefaultProviderMetrics(meta, output)
+    if (selected.length === 0) continue
+
     const limitedUntilMs = getLimitedUntilMs(pluginStates[id], nowMs)
-
-    let providerBars = (barsById.get(id) ?? []).filter(
-      (bar): bar is TrayPrimaryBar & { label: string; fraction: number } =>
-        typeof bar.label === "string" && typeof bar.fraction === "number"
-    )
-    if (widgetMetric === WIDGET_METRIC_SUGESTAO) {
-      providerBars = filterSugestaoBars(id, meta.name, providerBars)
-    }
-    if (widgetMetric === WIDGET_METRIC_MOST_USED && providerBars.length > 1) {
-      providerBars = [
-        providerBars.reduce((max, bar) => (bar.fraction > max.fraction ? bar : max)),
-      ]
-    }
-
-    const primary = providerBars[0]
+    const metrics = buildSelectedMetrics(meta, output, selected, nowMs)
+    const primary = metrics[0]
     rows.push({
       id,
       name: meta.name,
       iconUrl: meta.iconUrl,
       brandColor: meta.brandColor,
-      fraction: typeof primary?.fraction === "number" ? primary.fraction : null,
-      expectedFraction: typeof primary?.expectedFraction === "number" ? primary.expectedFraction : null,
-      tone:
-        limitedUntilMs !== undefined
-          ? "behind"
-          : paceTone(primary?.usedFraction, primary?.expectedFraction),
-      metrics: multiMode
-        ? providerBars.map((bar) => ({
-            label: bar.label,
-            fraction: bar.fraction,
-            expectedFraction: typeof bar.expectedFraction === "number" ? bar.expectedFraction : null,
-            hidePercentSign: widgetMetric === WIDGET_METRIC_SUGESTAO,
-            tone: paceTone(bar.usedFraction, bar.expectedFraction),
-          }))
-        : undefined,
+      fraction: primary?.fraction ?? null,
+      expectedFraction: primary?.expectedFraction ?? null,
+      tone: limitedUntilMs !== undefined ? "behind" : (primary?.tone ?? "neutral"),
+      metrics,
       limitedUntilMs,
     })
   }

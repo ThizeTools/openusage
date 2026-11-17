@@ -24,8 +24,6 @@ const state = vi.hoisted(() => ({
   saveGlobalShortcutMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
   saveStartOnLoginMock: vi.fn(),
-  loadWidgetLayoutMock: vi.fn(),
-  saveWidgetLayoutMock: vi.fn(),
   loadWidgetVisibleMock: vi.fn(),
   loadWidgetProviderIdsMock: vi.fn(),
   saveWidgetProviderIdsMock: vi.fn(),
@@ -201,6 +199,14 @@ vi.mock("@tauri-apps/plugin-autostart", () => ({
   isEnabled: state.autostartIsEnabledMock,
 }))
 
+vi.mock("@tauri-apps/plugin-store", () => ({
+  LazyStore: class {
+    async onKeyChange() {
+      return () => {}
+    }
+  },
+}))
+
 vi.mock("@/lib/tray-bars-icon", async () => {
   const actual = await vi.importActual<typeof import("@/lib/tray-bars-icon")>("@/lib/tray-bars-icon")
   return {
@@ -237,8 +243,6 @@ vi.mock("@/lib/settings", async () => {
     saveGlobalShortcut: state.saveGlobalShortcutMock,
     loadStartOnLogin: state.loadStartOnLoginMock,
     saveStartOnLogin: state.saveStartOnLoginMock,
-    loadWidgetLayout: state.loadWidgetLayoutMock,
-    saveWidgetLayout: state.saveWidgetLayoutMock,
     loadWidgetVisible: state.loadWidgetVisibleMock,
     loadWidgetProviderIds: state.loadWidgetProviderIdsMock,
     saveWidgetProviderIds: state.saveWidgetProviderIdsMock,
@@ -278,8 +282,6 @@ describe("App", () => {
     state.saveGlobalShortcutMock.mockReset()
     state.loadStartOnLoginMock.mockReset()
     state.saveStartOnLoginMock.mockReset()
-    state.loadWidgetLayoutMock.mockReset()
-    state.saveWidgetLayoutMock.mockReset()
     state.loadWidgetVisibleMock.mockReset()
     state.loadWidgetProviderIdsMock.mockReset()
     state.saveWidgetProviderIdsMock.mockReset()
@@ -320,8 +322,6 @@ describe("App", () => {
     state.saveGlobalShortcutMock.mockResolvedValue(undefined)
     state.loadStartOnLoginMock.mockResolvedValue(false)
     state.saveStartOnLoginMock.mockResolvedValue(undefined)
-    state.loadWidgetLayoutMock.mockResolvedValue("vertical")
-    state.saveWidgetLayoutMock.mockResolvedValue(undefined)
     state.loadWidgetVisibleMock.mockResolvedValue(false)
     state.loadWidgetProviderIdsMock.mockResolvedValue(null)
     state.saveWidgetProviderIdsMock.mockResolvedValue(undefined)
@@ -396,6 +396,52 @@ describe("App", () => {
     await waitFor(() => expect(state.migrateLegacyTraySettingsMock).toHaveBeenCalled())
     expect(screen.getByText("Alpha")).toBeInTheDocument()
     expect(state.setSizeMock).toHaveBeenCalled()
+  })
+
+  it("does not show empty providers before bootstrap resolves", () => {
+    state.invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_plugins") {
+        return new Promise(() => {})
+      }
+      return null
+    })
+
+    render(<App />)
+
+    expect(screen.getByText("Loading providers...")).toBeInTheDocument()
+    expect(screen.queryByText("No providers enabled")).not.toBeInTheDocument()
+  })
+
+  it("shows a retry action when provider discovery fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    let listPluginsCalls = 0
+    state.invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_plugins") {
+        listPluginsCalls += 1
+        if (listPluginsCalls <= 2) {
+          throw new Error("provider list unavailable")
+        }
+        return [
+          {
+            id: "a",
+            name: "Alpha",
+            iconUrl: "icon-a",
+            primaryProgressLabel: null,
+            lines: [{ type: "text", label: "Now", scope: "overview" }],
+          },
+        ]
+      }
+      return null
+    })
+
+    render(<App />)
+
+    await screen.findByText("Failed to load providers")
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument())
+    expect(listPluginsCalls).toBe(3)
+    errorSpy.mockRestore()
   })
 
   it("calls migrateLegacyTraySettings before loadMenubarIconStyle during bootstrap", async () => {
@@ -909,7 +955,7 @@ describe("App", () => {
 
   it("handles initial batch failure", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    state.startBatchMock.mockRejectedValueOnce(new Error("fail"))
+    state.startBatchMock.mockRejectedValue(new Error("fail"))
     render(<App />)
     const errors = await screen.findAllByText("Failed to start probe")
     expect(errors.length).toBeGreaterThan(0)
@@ -1242,6 +1288,7 @@ describe("App", () => {
       })
       await screen.findByRole("button", { name: "Retry" })
 
+      const callsBeforeRefresh = state.startBatchMock.mock.calls.length
       state.startBatchMock.mockRejectedValueOnce(new Error("refresh all failed"))
       const refreshButton = await screen.findByRole("button", { name: /Next update in/i })
       await userEvent.click(refreshButton)
@@ -1249,7 +1296,7 @@ describe("App", () => {
       await waitFor(() =>
         expect(errorSpy).toHaveBeenCalledWith("Failed to start refresh batch:", expect.any(Error))
       )
-      expect(state.startBatchMock).toHaveBeenCalledTimes(2)
+      expect(state.startBatchMock).toHaveBeenCalledTimes(callsBeforeRefresh + 1)
       await screen.findByText("Failed to start probe")
 
       // Simulate non-manual success after the failed refresh attempt.

@@ -7,9 +7,11 @@ mod panel;
 mod plugin_engine;
 mod settings_window;
 mod tray;
-mod widget;
 #[cfg(target_os = "macos")]
 mod webkit_config;
+mod accounts;
+mod taskbar;
+mod widget;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -29,10 +31,8 @@ const GLOBAL_SHORTCUT_STORE_KEY: &str = "globalShortcut";
 const STATS_SHORTCUT_STORE_KEY: &str = "statsShortcut";
 const DAILY_ACTIVE_TRACKED_DAY_KEY: &str = "analytics.daily_active_day";
 const DAILY_ACTIVE_EVENT_NAME: &str = "app_started";
-const MAX_CONCURRENT_PROBES: usize = 4;
-
 fn probe_worker_count(plugin_count: usize) -> usize {
-    plugin_count.min(MAX_CONCURRENT_PROBES)
+    plugin_count
 }
 
 fn today_utc_ymd() -> String {
@@ -135,7 +135,7 @@ fn managed_stats_shortcut_slot() -> &'static Mutex<Option<String>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-/// Shared shortcut handler that toggles the floating widget when pressed.
+/// Shared shortcut handler that toggles the taskbar widget when pressed.
 #[cfg(desktop)]
 fn handle_global_shortcut(
     app: &tauri::AppHandle,
@@ -193,7 +193,11 @@ fn apply_managed_shortcut(
                 *managed_shortcut = None;
             }
             Err(e) => {
-                log::warn!("Failed to unregister existing shortcut '{}': {}", existing, e);
+                log::warn!(
+                    "Failed to unregister existing shortcut '{}': {}",
+                    existing,
+                    e
+                );
             }
         }
     }
@@ -236,11 +240,12 @@ fn register_initial_shortcut(
     };
 
     log::info!("Registering initial global shortcut: {}", shortcut);
-    if let Err(e) = app_handle
-        .global_shortcut()
-        .on_shortcut(shortcut.as_str(), move |app, _shortcut, event| {
-            handler(app, event);
-        })
+    if let Err(e) =
+        app_handle
+            .global_shortcut()
+            .on_shortcut(shortcut.as_str(), move |app, _shortcut, event| {
+                handler(app, event);
+            })
     {
         log::warn!("Failed to register initial global shortcut: {}", e);
     } else if let Ok(mut managed_shortcut) = slot.lock() {
@@ -337,21 +342,6 @@ fn set_widget_visible(app_handle: tauri::AppHandle, visible: bool) {
 }
 
 #[tauri::command]
-fn save_widget_position(app_handle: tauri::AppHandle, x: i32, y: i32) {
-    widget::save_widget_position(&app_handle, x, y);
-}
-
-#[tauri::command]
-fn move_widget_to(app_handle: tauri::AppHandle, x: i32, y: i32) {
-    widget::move_widget_to(&app_handle, x, y);
-}
-
-#[tauri::command]
-fn bring_widget_on_screen(app_handle: tauri::AppHandle) {
-    widget::bring_widget_on_screen(&app_handle);
-}
-
-#[tauri::command]
 fn open_devtools(#[allow(unused)] app_handle: tauri::AppHandle) {
     #[cfg(debug_assertions)]
     {
@@ -383,7 +373,7 @@ async fn start_probe_batch(
     let (plugins, app_data_dir, app_version) = {
         let locked = state.lock().map_err(|e| e.to_string())?;
         (
-            locked.plugins.clone(),
+            accounts::expand_plugins(&locked.plugins),
             locked.app_data_dir.clone(),
             locked.app_version.clone(),
         )
@@ -434,15 +424,6 @@ async fn start_probe_batch(
 
     let selected_count = selected_plugins.len();
     let worker_count = probe_worker_count(selected_count);
-    if worker_count < selected_count {
-        log::info!(
-            "probe batch {} using {} workers for {} plugins",
-            batch_id,
-            worker_count,
-            selected_count
-        );
-    }
-
     let remaining = Arc::new(AtomicUsize::new(selected_count));
     let probe_queue = Arc::new(Mutex::new(
         selected_plugins.into_iter().collect::<VecDeque<_>>(),
@@ -569,7 +550,7 @@ fn open_settings_window(app_handle: tauri::AppHandle) {
 fn list_plugins(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PluginMeta> {
     let plugins = {
         let locked = state.lock().expect("plugin state poisoned");
-        locked.plugins.clone()
+        accounts::expand_plugins(&locked.plugins)
     };
     log::debug!("list_plugins: {} plugins", plugins.len());
 
@@ -617,6 +598,33 @@ fn list_plugins(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PluginMeta> {
         .collect()
 }
 
+#[tauri::command]
+fn get_cached_probe_outputs(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Vec<plugin_engine::runtime::PluginOutput> {
+    let icon_urls: HashMap<String, String> = {
+        let locked = state.lock().expect("plugin state poisoned");
+        accounts::expand_plugins(&locked.plugins)
+            .iter()
+            .map(|plugin| (plugin.manifest.id.clone(), plugin.icon_data_url.clone()))
+            .collect()
+    };
+
+    local_http_api::cached_snapshots()
+        .into_iter()
+        .map(|snapshot| plugin_engine::runtime::PluginOutput {
+            icon_url: icon_urls
+                .get(&snapshot.provider_id)
+                .cloned()
+                .unwrap_or_default(),
+            provider_id: snapshot.provider_id,
+            display_name: snapshot.display_name,
+            plan: snapshot.plan,
+            lines: snapshot.lines,
+        })
+        .collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
@@ -659,13 +667,19 @@ pub fn run() {
             reposition_panel,
             toggle_widget,
             set_widget_visible,
-            save_widget_position,
-            move_widget_to,
-            bring_widget_on_screen,
+            taskbar::taskbar_widget_update,
+            accounts::list_accounts,
+            accounts::list_account_providers,
+            accounts::start_account_login,
+            accounts::cancel_account_login,
+            accounts::add_api_key_account,
+            accounts::remove_account,
+            accounts::rename_account,
             open_devtools,
             open_settings_window,
             start_probe_batch,
             list_plugins,
+            get_cached_probe_outputs,
             get_log_path,
             update_global_shortcut,
             update_stats_shortcut
@@ -707,6 +721,7 @@ pub fn run() {
             );
 
             let (_, plugins) = plugin_engine::initialize_plugins(&app_data_dir, &resource_dir);
+            accounts::init(&app_data_dir);
             let known_plugin_ids: Vec<String> =
                 plugins.iter().map(|p| p.manifest.id.clone()).collect();
             app.manage(Mutex::new(AppState {
@@ -720,19 +735,9 @@ pub fn run() {
 
             tray::create(app.handle())?;
 
-            // Restore the floating widget if it was visible last session.
-            {
-                use tauri_plugin_store::StoreExt;
-                if let Ok(store) = app.handle().store("settings.json") {
-                    let widget_visible = store
-                        .get("widgetVisible")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false);
-                    if widget_visible {
-                        widget::show_widget(app.handle());
-                    }
-                }
-            }
+            // Taskbar widget: own thread; visible unless turned off.
+            taskbar::init(app.handle());
+            widget::restore_on_startup(app.handle());
 
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -770,14 +775,14 @@ pub fn run() {
             // destroy it on close so the tray can always reopen it.
             #[cfg(not(target_os = "macos"))]
             if let Some(main_window) = app.get_webview_window("main") {
-                let handle = main_window.clone();
+                let app_handle = app.handle().clone();
                 main_window.on_window_event(move |event| match event {
                     tauri::WindowEvent::Focused(false) => {
-                        let _ = handle.hide();
+                        panel::schedule_blur_hide(&app_handle);
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        let _ = handle.hide();
+                        panel::hide_panel(&app_handle);
                     }
                     _ => {}
                 });
@@ -798,8 +803,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DAILY_ACTIVE_TRACKED_DAY_KEY, MAX_CONCURRENT_PROBES, probe_worker_count,
-        seconds_until_next_utc_day, should_track_daily_active,
+        probe_worker_count, seconds_until_next_utc_day, should_track_daily_active,
+        DAILY_ACTIVE_TRACKED_DAY_KEY,
     };
     use time::{Date, Month, PrimitiveDateTime, Time};
 
@@ -837,16 +842,9 @@ mod tests {
     }
 
     #[test]
-    fn probe_worker_count_is_bounded() {
+    fn probe_worker_count_keeps_providers_independent() {
         assert_eq!(probe_worker_count(0), 0);
         assert_eq!(probe_worker_count(1), 1);
-        assert_eq!(
-            probe_worker_count(MAX_CONCURRENT_PROBES),
-            MAX_CONCURRENT_PROBES
-        );
-        assert_eq!(
-            probe_worker_count(MAX_CONCURRENT_PROBES + 1),
-            MAX_CONCURRENT_PROBES
-        );
+        assert_eq!(probe_worker_count(17), 17);
     }
 }

@@ -1,674 +1,569 @@
 (function () {
-  function stateDbPath(ctx) {
-    if (ctx.app.platform === "windows") {
-      return "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb"
-    }
-    return "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
-  }
-  const KEYCHAIN_ACCESS_TOKEN_SERVICE = "cursor-access-token"
-  const KEYCHAIN_REFRESH_TOKEN_SERVICE = "cursor-refresh-token"
-  const BASE_URL = "https://api2.cursor.sh"
-  const USAGE_URL = BASE_URL + "/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
-  const PLAN_URL = BASE_URL + "/aiserver.v1.DashboardService/GetPlanInfo"
-  const REFRESH_URL = BASE_URL + "/oauth/token"
-  const CREDITS_URL = BASE_URL + "/aiserver.v1.DashboardService/GetCreditGrantsBalance"
-  const REST_USAGE_URL = "https://cursor.com/api/usage"
-  const STRIPE_URL = "https://cursor.com/api/auth/stripe"
-  const CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
-  const REFRESH_BUFFER_MS = 5 * 60 * 1000 // refresh 5 minutes before expiration
-  const LOGIN_HINT = "Sign in via Cursor app or run `agent login`."
+  var SIGN_IN = "Sign in again in Settings → Accounts."
+  var API = "https://api2.cursor.sh/aiserver.v1.DashboardService/"
+  var USAGE_URL = API + "GetCurrentPeriodUsage"
+  var PLAN_URL = API + "GetPlanInfo"
+  var CREDITS_URL = API + "GetCreditGrantsBalance"
+  var GROK_URL = API + "GetSandUsageStatus"
+  var REFRESH_URL = "https://api2.cursor.sh/oauth/token"
+  var CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
+  var WEB = "https://cursor.com/api/"
+  var USAGE_SUMMARY_URL = WEB + "usage-summary"
+  var REST_USAGE_URL = WEB + "usage"
+  var STRIPE_URL = WEB + "auth/stripe"
+  var PROFILE_URL = WEB + "auth/me"
+  var TIMEOUT_MS = 10000
+  var DAY_MS = 24 * 60 * 60 * 1000
+  var WEEK_MS = 7 * DAY_MS
+  var MONTH_MS = 30 * DAY_MS
+  // The access token is a 60-day JWT that is also the refresh token: renew a week before its exp.
+  var REFRESH_LEAD_MS = WEEK_MS
+  var RENEWAL_REFUSED = ["invalid_grant", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated"]
+  var ON_DEMAND_LABELS = ["Extra Usage", "Team Spend"]
 
-  function readStateValue(ctx, key) {
-    try {
-      const sql =
-        "SELECT value FROM ItemTable WHERE key = '" + key + "' LIMIT 1;"
-      const json = ctx.host.sqlite.query(stateDbPath(ctx), sql)
-      const rows = ctx.util.tryParseJson(json)
-      if (!Array.isArray(rows)) {
-        throw new Error("sqlite returned invalid json")
-      }
-      if (rows.length > 0 && rows[0].value) {
-        return rows[0].value
-      }
-    } catch (e) {
-      ctx.host.log.warn("sqlite read failed for " + key + ": " + String(e))
+  function obj(v) {
+    return v && typeof v === "object" && !Array.isArray(v) ? v : null
+  }
+
+  function num(v) {
+    if (typeof v === "number") return isFinite(v) ? v : null
+    if (typeof v === "string" && v.trim() !== "") {
+      var n = Number(v)
+      return isFinite(n) ? n : null
     }
     return null
   }
 
-  function writeStateValue(ctx, key, value) {
-    try {
-      // Escape single quotes in value for SQL
-      const escaped = String(value).replace(/'/g, "''")
-      const sql =
-        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('" +
-        key +
-        "', '" +
-        escaped +
-        "');"
-      ctx.host.sqlite.exec(stateDbPath(ctx), sql)
-      return true
-    } catch (e) {
-      ctx.host.log.warn("sqlite write failed for " + key + ": " + String(e))
-      return false
-    }
+  function numOr(v, fallback) {
+    var n = num(v)
+    return n === null ? fallback : n
   }
 
-  function readKeychainValue(ctx, service) {
-    if (!ctx.host.keychain || typeof ctx.host.keychain.readGenericPassword !== "function") {
-      return null
-    }
-    try {
-      const value = ctx.host.keychain.readGenericPassword(service)
-      if (typeof value !== "string") return null
-      const trimmed = value.trim()
-      return trimmed || null
-    } catch (e) {
-      ctx.host.log.info("keychain read failed for " + service + ": " + String(e))
-      return null
-    }
+  function str(v) {
+    return typeof v === "string" && v.trim() !== "" ? v.trim() : null
   }
 
-  function writeKeychainValue(ctx, service, value) {
-    if (!ctx.host.keychain || typeof ctx.host.keychain.writeGenericPassword !== "function") {
-      ctx.host.log.warn("keychain write unsupported")
-      return false
-    }
-    try {
-      ctx.host.keychain.writeGenericPassword(service, String(value))
-      return true
-    } catch (e) {
-      ctx.host.log.warn("keychain write failed for " + service + ": " + String(e))
-      return false
-    }
+  function money(cents) {
+    return "$" + (cents / 100).toFixed(2)
   }
 
-  function loadAuthState(ctx) {
-    const sqliteAccessToken = readStateValue(ctx, "cursorAuth/accessToken")
-    const sqliteRefreshToken = readStateValue(ctx, "cursorAuth/refreshToken")
-    const sqliteMembershipTypeRaw = readStateValue(ctx, "cursorAuth/stripeMembershipType")
-    const sqliteMembershipType = typeof sqliteMembershipTypeRaw === "string"
-      ? sqliteMembershipTypeRaw.trim().toLowerCase()
-      : null
-
-    const keychainAccessToken = readKeychainValue(ctx, KEYCHAIN_ACCESS_TOKEN_SERVICE)
-    const keychainRefreshToken = readKeychainValue(ctx, KEYCHAIN_REFRESH_TOKEN_SERVICE)
-
-    const sqliteSubject = getTokenSubject(ctx, sqliteAccessToken)
-    const keychainSubject = getTokenSubject(ctx, keychainAccessToken)
-    const hasDifferentSubjects = !!sqliteSubject && !!keychainSubject && sqliteSubject !== keychainSubject
-    const sqliteLooksFree = sqliteMembershipType === "free"
-
-    if (sqliteAccessToken || sqliteRefreshToken) {
-      if ((keychainAccessToken || keychainRefreshToken) && sqliteLooksFree && hasDifferentSubjects) {
-        ctx.host.log.info("sqlite auth looks free and differs from keychain account; preferring keychain token")
-        return {
-          accessToken: keychainAccessToken,
-          refreshToken: keychainRefreshToken,
-          source: "keychain",
-        }
-      }
-
-      return {
-        accessToken: sqliteAccessToken,
-        refreshToken: sqliteRefreshToken,
-        source: "sqlite",
-      }
-    }
-
-    if (keychainAccessToken || keychainRefreshToken) {
-      return {
-        accessToken: keychainAccessToken,
-        refreshToken: keychainRefreshToken,
-        source: "keychain",
-      }
-    }
-
-    return {
-      accessToken: null,
-      refreshToken: null,
-      source: null,
-    }
+  function jwtPayload(ctx, token) {
+    return obj(ctx.jwt.decodePayload(token))
   }
 
-  function getTokenSubject(ctx, token) {
-    if (!token) return null
-    const payload = ctx.jwt.decodePayload(token)
-    if (!payload || typeof payload.sub !== "string") return null
-    const subject = payload.sub.trim()
-    return subject || null
+  function jwtExpMs(ctx, token) {
+    var payload = jwtPayload(ctx, token)
+    var exp = payload ? num(payload.exp) : null
+    return exp === null ? null : exp * 1000
   }
 
-  function persistAccessToken(ctx, source, accessToken) {
-    if (source === "keychain") {
-      return writeKeychainValue(ctx, KEYCHAIN_ACCESS_TOKEN_SERVICE, accessToken)
-    }
-    return writeStateValue(ctx, "cursorAuth/accessToken", accessToken)
+  function isoMs(ctx, value) {
+    var iso = ctx.util.toIso(value)
+    return iso === null ? null : Date.parse(iso)
   }
 
-  function getTokenExpiration(ctx, token) {
-    const payload = ctx.jwt.decodePayload(token)
-    if (!payload || typeof payload.exp !== "number") return null
-    return payload.exp * 1000 // Convert to milliseconds
-  }
-
-  function needsRefresh(ctx, accessToken, nowMs) {
-    if (!accessToken) return true
-    const expiresAt = getTokenExpiration(ctx, accessToken)
-    return ctx.util.needsRefreshByExpiry({
-      nowMs,
-      expiresAtMs: expiresAt,
-      bufferMs: REFRESH_BUFFER_MS,
-    })
-  }
-
-  function refreshToken(ctx, refreshTokenValue, source) {
-    if (!refreshTokenValue) {
-      ctx.host.log.warn("refresh skipped: no refresh token")
-      return null
-    }
-
-    ctx.host.log.info("attempting token refresh")
-    try {
-      const resp = ctx.util.request({
-        method: "POST",
-        url: REFRESH_URL,
-        headers: { "Content-Type": "application/json" },
-        bodyText: JSON.stringify({
-          grant_type: "refresh_token",
-          client_id: CLIENT_ID,
-          refresh_token: refreshTokenValue,
-        }),
-        timeoutMs: 15000,
-      })
-
-      if (resp.status === 400 || resp.status === 401) {
-        let errorInfo = null
-        errorInfo = ctx.util.tryParseJson(resp.bodyText)
-        const shouldLogout = errorInfo && errorInfo.shouldLogout === true
-        ctx.host.log.error("refresh failed: status=" + resp.status + " shouldLogout=" + shouldLogout)
-        if (shouldLogout) {
-          throw "Session expired. " + LOGIN_HINT
-        }
-        throw "Token expired. " + LOGIN_HINT
-      }
-
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("refresh returned unexpected status: " + resp.status)
-        return null
-      }
-
-      const body = ctx.util.tryParseJson(resp.bodyText)
-      if (!body) {
-        ctx.host.log.warn("refresh response not valid JSON")
-        return null
-      }
-
-      // Check if server wants us to logout
-      if (body.shouldLogout === true) {
-        ctx.host.log.error("refresh response indicates shouldLogout=true")
-        throw "Session expired. " + LOGIN_HINT
-      }
-
-      const newAccessToken = body.access_token
-      if (!newAccessToken) {
-        ctx.host.log.warn("refresh response missing access_token")
-        return null
-      }
-
-      // Persist updated access token to source where auth was loaded from.
-      persistAccessToken(ctx, source, newAccessToken)
-      ctx.host.log.info("refresh succeeded, token persisted")
-
-      // Note: Cursor refresh returns access_token which is used as both
-      // access and refresh token in some flows
-      return newAccessToken
-    } catch (e) {
-      if (typeof e === "string") throw e
-      ctx.host.log.error("refresh exception: " + String(e))
-      return null
-    }
+  // Session cookie built from the JWT subject, as the cursor.com endpoints expect it.
+  function cursorSession(ctx, token) {
+    var payload = jwtPayload(ctx, token)
+    var subject = payload ? str(payload.sub) : null
+    if (!subject) return null
+    var parts = subject.split("|")
+    var userId = parts.length > 1 ? parts[1] : parts[0]
+    if (!userId) return null
+    return { userId: userId, cookie: "WorkosCursorSessionToken=" + userId + "%3A%3A" + token }
   }
 
   function connectPost(ctx, url, token) {
-    return ctx.util.request({
+    return ctx.host.http.request({
       method: "POST",
       url: url,
       headers: {
         Authorization: "Bearer " + token,
         "Content-Type": "application/json",
-        "Connect-Protocol-Version": "1",
+        "Connect-Protocol-Version": "1"
       },
       bodyText: "{}",
-      timeoutMs: 10000,
+      timeoutMs: TIMEOUT_MS
     })
   }
 
-  function buildSessionToken(ctx, accessToken) {
-    var payload = ctx.jwt.decodePayload(accessToken)
-    if (!payload || !payload.sub) return null
-    var parts = String(payload.sub).split("|")
-    var userId = parts.length > 1 ? parts[1] : parts[0]
-    if (!userId) return null
-    return { userId: userId, sessionToken: userId + "%3A%3A" + accessToken }
+  function cookieGet(ctx, url, session) {
+    if (!session) return null
+    return ctx.host.http.request({ method: "GET", url: url, headers: { Cookie: session.cookie }, timeoutMs: TIMEOUT_MS })
   }
 
-  function fetchRequestBasedUsage(ctx, accessToken) {
-    var session = buildSessionToken(ctx, accessToken)
-    if (!session) {
-      ctx.host.log.warn("request-based: cannot build session token")
-      return null
-    }
+  // Optional reads: a failure is logged and only its metric is skipped.
+  function optionalJson(ctx, label, send) {
+    var resp = null
     try {
-      var resp = ctx.util.request({
-        method: "GET",
-        url: REST_USAGE_URL + "?user=" + encodeURIComponent(session.userId),
-        headers: {
-          Cookie: "WorkosCursorSessionToken=" + session.sessionToken,
-        },
-        timeoutMs: 10000,
-      })
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("request-based usage returned status=" + resp.status)
-        return null
-      }
-      return ctx.util.tryParseJson(resp.bodyText)
+      resp = send()
     } catch (e) {
-      ctx.host.log.warn("request-based usage fetch failed: " + String(e))
+      ctx.host.log.warn("Cursor " + label + " request failed: " + String(e))
       return null
+    }
+    if (!resp) {
+      ctx.host.log.warn("Cursor " + label + " request could not be prepared from the current session")
+      return null
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+      ctx.host.log.warn("Cursor " + label + " request returned HTTP " + resp.status)
+      return null
+    }
+    var body = obj(ctx.util.tryParseJson(resp.bodyText))
+    if (!body) ctx.host.log.warn("Cursor " + label + " response was not a JSON object")
+    return body
+  }
+
+  function errorCode(body) {
+    if (typeof body.error === "string") return body.error
+    var err = obj(body.error)
+    if (err && typeof err.code === "string") return err.code
+    return typeof body.code === "string" ? body.code : null
+  }
+
+  // Trades the refresh token for a new JWT and saves it. Cursor answers with access_token only.
+  function refreshAccess(ctx, creds) {
+    var refreshToken = str(creds.refreshToken)
+    if (!refreshToken) throw SIGN_IN
+    var resp = ctx.host.http.request({
+      method: "POST",
+      url: REFRESH_URL,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      bodyText: JSON.stringify({ grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: refreshToken }),
+      timeoutMs: TIMEOUT_MS
+    })
+    var body = obj(ctx.util.tryParseJson(resp.bodyText))
+    if (body && body.shouldLogout === true) throw SIGN_IN
+    if (resp.status < 200 || resp.status >= 300) {
+      var code = body ? errorCode(body) : null
+      if ([400, 401, 403].indexOf(resp.status) >= 0 && RENEWAL_REFUSED.indexOf(code) >= 0) throw SIGN_IN
+      throw "Cursor sign-in renewal failed (HTTP " + resp.status + "). Try again later."
+    }
+    var access = body ? str(body.access_token) : null
+    if (!access) throw "Cursor sign-in renewal returned an invalid response. Try again later."
+    var next = Object.assign({}, creds, {
+      accessToken: access,
+      refreshToken: str(body.refresh_token) || access,
+      expiresAt: jwtExpMs(ctx, access)
+    })
+    ctx.account.saveCredentials(JSON.stringify(next))
+    return next
+  }
+
+  function resolvedPlanName(planName, membership) {
+    var lower = planName ? planName.toLowerCase() : null
+    var isOrg = membership === "enterprise" || membership === "team"
+    if (isOrg && (planName === null || lower === "pro" || lower === "pro plan")) return membership
+    return planName || membership
+  }
+
+  function billingCycle(ctx, usage) {
+    var start = num(usage.billingCycleStart)
+    var end = num(usage.billingCycleEnd)
+    if (start !== null && end !== null && end > start) {
+      return { resetsAt: ctx.util.toIso(end), periodMs: Math.round(end - start) }
+    }
+    return { resetsAt: end === null ? null : ctx.util.toIso(end), periodMs: MONTH_MS }
+  }
+
+  function summaryCycle(ctx, summary, rest) {
+    var start = summary ? isoMs(ctx, summary.billingCycleStart) : null
+    var end = summary ? isoMs(ctx, summary.billingCycleEnd) : null
+    if (start !== null && end !== null && end > start) {
+      return { resetsAt: ctx.util.toIso(end), periodMs: end - start }
+    }
+    var restStart = rest ? isoMs(ctx, rest.startOfMonth) : null
+    return { resetsAt: restStart === null ? null : ctx.util.toIso(restStart + MONTH_MS), periodMs: MONTH_MS }
+  }
+
+  function percentLine(ctx, label, used, cycle) {
+    return ctx.line.progress({
+      label: label,
+      used: used,
+      limit: 100,
+      format: { kind: "percent" },
+      resetsAt: cycle.resetsAt,
+      periodDurationMs: cycle.periodMs
+    })
+  }
+
+  // Cents in, dollars out.
+  function dollarLine(ctx, label, usedCents, limitCents, cycle) {
+    return ctx.line.progress({
+      label: label,
+      used: usedCents / 100,
+      limit: limitCents / 100,
+      format: { kind: "dollars" },
+      resetsAt: cycle.resetsAt,
+      periodDurationMs: cycle.periodMs
+    })
+  }
+
+  function countLine(ctx, label, used, limit, cycle) {
+    return ctx.line.progress({
+      label: label,
+      used: used,
+      limit: limit,
+      format: { kind: "count", suffix: "requests" },
+      resetsAt: cycle.resetsAt,
+      periodDurationMs: cycle.periodMs
+    })
+  }
+
+  function planFacts(usage) {
+    var pu = obj(usage.planUsage)
+    var hasPlanUsage = pu !== null
+    pu = pu || {}
+    var limit = num(pu.limit)
+    var totalPercentUsed = num(pu.totalPercentUsed)
+    var auto = num(pu.autoPercentUsed)
+    var api = num(pu.apiPercentUsed)
+    var spent = numOr(pu.totalSpend, (limit || 0) - numOr(pu.remaining, limit === null ? 0 : limit))
+    var hasModelPools = false
+    if (auto !== null && api !== null && auto >= 0 && api >= 0) {
+      hasModelPools = auto > 0 || api > 0 || spent === 0
+    }
+    var sl = obj(usage.spendLimitUsage) || {}
+    var limitType = str(sl.limitType)
+    var pooledLimit = numOr(sl.pooledLimit, 0)
+    var isEnabled = usage.enabled !== false
+    var planUsageLimitMissing = hasPlanUsage && limit === null
+    return {
+      isEnabled: isEnabled,
+      hasPlanUsage: hasPlanUsage,
+      limit: limit,
+      totalPercentUsed: totalPercentUsed,
+      hasModelPools: hasModelPools,
+      pooledLimit: pooledLimit,
+      planUsageLimitMissing: planUsageLimitMissing,
+      planUsageUnusable: !hasPlanUsage || (planUsageLimitMissing && !hasModelPools),
+      isTeamByShape: (limitType !== null && limitType.toLowerCase() === "team") || pooledLimit > 0,
+      shouldTryGenericRequestFallback: isEnabled && hasPlanUsage && limit === null && totalPercentUsed === null && !hasModelPools
     }
   }
 
-  function fetchStripeBalance(ctx, accessToken) {
-    var session = buildSessionToken(ctx, accessToken)
-    if (!session) {
-      ctx.host.log.warn("stripe: cannot build session token")
-      return null
+  // Non-null when plan data is unusable and the request-based summary must be read instead.
+  function requestFallbackMessage(f, planName) {
+    if (!f.isEnabled) return null
+    var normalized = planName ? planName.toLowerCase() : ""
+    if (f.planUsageUnusable && f.totalPercentUsed === null) {
+      if (normalized === "enterprise") return "Enterprise usage data unavailable. Try again later."
+      if (normalized === "team") return "Team request-based usage data unavailable. Try again later."
+      if (normalized === "" && planName === null) return "Cursor request-based usage data unavailable. Try again later."
     }
-    try {
-      var resp = ctx.util.request({
-        method: "GET",
-        url: STRIPE_URL,
-        headers: {
-          Cookie: "WorkosCursorSessionToken=" + session.sessionToken,
-        },
-        timeoutMs: 10000,
-      })
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("stripe balance returned status=" + resp.status)
-        return null
-      }
-      var stripe = ctx.util.tryParseJson(resp.bodyText)
-      if (!stripe) return null
-      var customerBalanceCents = Number(stripe.customerBalance)
-      if (!Number.isFinite(customerBalanceCents)) return null
-      // Stripe stores customer credits as a negative balance.
-      return customerBalanceCents < 0 ? Math.abs(customerBalanceCents) : 0
-    } catch (e) {
-      ctx.host.log.warn("stripe balance fetch failed: " + String(e))
-      return null
+    if (f.isTeamByShape && f.planUsageLimitMissing && !f.hasModelPools) {
+      return "Cursor request-based usage data unavailable. Try again later."
     }
+    return null
   }
 
-  function buildRequestBasedResult(ctx, accessToken, planName, unavailableMessage) {
-    var requestUsage = fetchRequestBasedUsage(ctx, accessToken)
+  function onDemandSpend(reported, limit, remaining) {
+    for (var i = 0; i < reported.length; i++) {
+      if (reported[i] > 0) return reported[i]
+    }
+    var inferred = remaining === null ? 0 : Math.max(0, limit - remaining)
+    if (inferred > 0) return inferred
+    return reported.length > 0 ? reported[0] : 0
+  }
+
+  function appendOnDemandUsage(ctx, sl, f, cycle, lines) {
+    var individualLimit = num(sl.individualLimit)
+    var hasTeamSpend = f.isTeamByShape || numOr(sl.pooledUsed, 0) > 0
+    var limit = 0
+    var spentKeys = ["individualUsed", "pooledUsed", "totalSpend"]
+    var remainingKey = null
+    if (individualLimit !== null) {
+      limit = individualLimit
+      spentKeys = hasTeamSpend ? ["individualUsed"] : ["individualUsed", "totalSpend"]
+      remainingKey = "individualRemaining"
+    } else if (f.pooledLimit > 0) {
+      limit = f.pooledLimit
+      spentKeys = ["pooledUsed"]
+      remainingKey = "pooledRemaining"
+    }
+    var reported = []
+    for (var i = 0; i < spentKeys.length; i++) {
+      var v = num(sl[spentKeys[i]])
+      if (v !== null) reported.push(v)
+    }
+    var spent = onDemandSpend(reported, limit, remainingKey ? num(sl[remainingKey]) : null)
+    var label = individualLimit === null && f.isTeamByShape && (limit > 0 || spent > 0) ? "Team Spend" : "Extra Usage"
+    if (limit > 0) lines.push(dollarLine(ctx, label, spent, limit, cycle))
+    else if (spent > 0) lines.push(ctx.line.text({ label: label, value: money(spent) }))
+  }
+
+  function creditsLine(ctx, credits, stripeCents, lines) {
+    var hasGrants = credits !== null && credits.hasCreditGrants === true
+    var grantTotal = hasGrants ? numOr(credits.totalCents, 0) : 0
+    var grantUsed = hasGrants ? numOr(credits.usedCents, 0) : 0
+    var validGrant = hasGrants && grantTotal > 0
+    var combined = (validGrant ? grantTotal : 0) + stripeCents
+    if (credits === null && !(combined > 0)) return
+    var remaining = Math.max(0, combined - (validGrant ? grantUsed : 0))
+    lines.push(ctx.line.text({ label: "Credits", value: money(remaining) + " left" }))
+  }
+
+  // Plan-usage metrics (the main path).
+  function usageLines(ctx, usage, f, planName, credits, stripeCents) {
+    if (!f.isEnabled || !f.hasPlanUsage) throw "No active Cursor subscription."
+    if (f.limit === null && f.totalPercentUsed === null && !f.hasModelPools) {
+      throw "Total usage limit missing from API response."
+    }
+    var pu = obj(usage.planUsage) || {}
+    var cycle = billingCycle(ctx, usage)
     var lines = []
+    creditsLine(ctx, credits, stripeCents, lines)
 
-    if (requestUsage) {
-      var gpt4 = requestUsage["gpt-4"]
-      if (gpt4 && typeof gpt4.maxRequestUsage === "number" && gpt4.maxRequestUsage > 0) {
-        var used = gpt4.numRequests || 0
-        var limit = gpt4.maxRequestUsage
+    var planUsedCents = numOr(pu.totalSpend, (f.limit || 0) - numOr(pu.remaining, 0))
+    var computedPercent = f.limit !== null && f.limit > 0 ? (planUsedCents / f.limit) * 100 : 0
+    var isTeam = (planName !== null && planName.toLowerCase() === "team") || f.isTeamByShape
+    if (isTeam && f.hasModelPools) {
+      // Structured pool data wins; never build a total from stale dollars.
+      if (f.totalPercentUsed !== null) lines.push(percentLine(ctx, "Total Usage", f.totalPercentUsed, cycle))
+    } else if (isTeam) {
+      if (f.limit !== null) lines.push(dollarLine(ctx, "Total Usage", planUsedCents, f.limit, cycle))
+      else if (f.totalPercentUsed !== null) lines.push(percentLine(ctx, "Total Usage", f.totalPercentUsed, cycle))
+      else throw "Cursor request-based usage data unavailable. Try again later."
+    } else {
+      lines.push(percentLine(ctx, "Total Usage", f.totalPercentUsed !== null ? f.totalPercentUsed : computedPercent, cycle))
+    }
 
-        var billingPeriodMs = 30 * 24 * 60 * 60 * 1000
-        var cycleStart = requestUsage.startOfMonth
-          ? ctx.util.parseDateMs(requestUsage.startOfMonth)
-          : null
-        var cycleEndMs = cycleStart ? cycleStart + billingPeriodMs : null
+    var auto = num(pu.autoPercentUsed)
+    if (auto !== null) lines.push(percentLine(ctx, "Cursor Models", auto, cycle))
+    var api = num(pu.apiPercentUsed)
+    if (api !== null) lines.push(percentLine(ctx, "Other Models", api, cycle))
 
-        lines.push(ctx.line.progress({
-          label: "Requests",
-          used: used,
-          limit: limit,
-          format: { kind: "count", suffix: "requests" },
-          resetsAt: ctx.util.toIso(cycleEndMs),
-          periodDurationMs: billingPeriodMs,
-        }))
+    var sl = obj(usage.spendLimitUsage)
+    if (sl) appendOnDemandUsage(ctx, sl, f, cycle, lines)
+    return lines
+  }
+
+  function dollarMeter(value) {
+    var b = obj(value)
+    if (!b || b.enabled === false) return null
+    var limit = num(b.limit)
+    if (limit === null || limit <= 0) return null
+    var reported = num(b.used)
+    var inferred = Math.max(0, limit - numOr(b.remaining, limit))
+    var used = reported !== null && reported > 0 ? reported : inferred
+    return { used: Math.max(0, used), limit: limit }
+  }
+
+  function appendOnDemandBucket(ctx, value, cycle, lines) {
+    var b = obj(value)
+    if (!b || b.enabled === false) return false
+    var meter = dollarMeter(b)
+    if (meter) {
+      lines.push(dollarLine(ctx, "Extra Usage", meter.used, meter.limit, cycle))
+      return true
+    }
+    var used = num(b.used)
+    if (used !== null && used > 0) {
+      lines.push(ctx.line.text({ label: "Extra Usage", value: money(used) }))
+      return true
+    }
+    return false
+  }
+
+  function appendOnDemand(ctx, summary, cycle, lines) {
+    var ind = obj(summary.individualUsage) || {}
+    var team = obj(summary.teamUsage) || {}
+    if (!appendOnDemandBucket(ctx, ind.onDemand, cycle, lines)) appendOnDemandBucket(ctx, team.onDemand, cycle, lines)
+  }
+
+  function usableDollarBucket(value) {
+    var b = obj(value)
+    if (!b || b.enabled === false) return false
+    return dollarMeter(b) !== null || numOr(b.used, 0) > 0
+  }
+
+  function hasUsableSummaryPayload(ctx, summary) {
+    var start = isoMs(ctx, summary.billingCycleStart)
+    var end = isoMs(ctx, summary.billingCycleEnd)
+    if (start !== null && end !== null && end > start) return true
+    var ind = obj(summary.individualUsage) || {}
+    var team = obj(summary.teamUsage) || {}
+    var plan = obj(ind.plan) || {}
+    var keys = ["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"]
+    for (var i = 0; i < keys.length; i++) {
+      if (num(plan[keys[i]]) !== null) return true
+    }
+    return [ind.onDemand, ind.overall, team.onDemand, team.pooled].some(usableDollarBucket)
+  }
+
+  function appendRequests(ctx, rest, cycle, lines) {
+    var gpt4 = rest ? obj(rest["gpt-4"]) : null
+    if (!gpt4) return false
+    var limit = num(gpt4.maxRequestUsage)
+    if (limit === null || limit <= 0) return false
+    var used = Math.max(0, numOr(gpt4.numRequests, numOr(gpt4.numRequestsTotal, 0)))
+    lines.push(countLine(ctx, "Total Usage", used, limit, cycle))
+    lines.push(countLine(ctx, "Requests", used, limit, cycle))
+    return true
+  }
+
+  function appendSummaryTotal(ctx, summary, cycle, lines) {
+    var ind = obj(summary.individualUsage) || {}
+    var team = obj(summary.teamUsage) || {}
+    var limitType = str(summary.limitType)
+    if (limitType !== null && limitType.toLowerCase() === "team") {
+      var pooled = dollarMeter(team.pooled)
+      if (pooled) {
+        lines.push(dollarLine(ctx, "Total Usage", pooled.used, pooled.limit, cycle))
+        return
       }
     }
-
-    if (lines.length === 0) {
-      ctx.host.log.warn("request-based: no usage data available")
-      throw unavailableMessage
+    var pct = num((obj(ind.plan) || {}).totalPercentUsed)
+    if (pct !== null) {
+      lines.push(percentLine(ctx, "Total Usage", pct, cycle))
+      return
     }
-
-    var plan = null
-    if (planName) {
-      var planLabel = ctx.fmt.planLabel(planName)
-      if (planLabel) plan = planLabel
+    var overall = dollarMeter(ind.overall)
+    if (overall) {
+      lines.push(dollarLine(ctx, "Total Usage", overall.used, overall.limit, cycle))
+      return
     }
-
-    return { plan: plan, lines: lines }
+    var teamPooled = dollarMeter(team.pooled)
+    if (teamPooled) lines.push(dollarLine(ctx, "Total Usage", teamPooled.used, teamPooled.limit, cycle))
   }
 
-  function buildEnterpriseResult(ctx, accessToken, planName) {
-    return buildRequestBasedResult(
-      ctx,
-      accessToken,
-      planName,
-      "Enterprise usage data unavailable. Try again later."
-    )
+  // Request-based summary: used when plan data is unusable (team, enterprise, or no limit).
+  function summaryLines(ctx, summary, rest) {
+    var cycle = summaryCycle(ctx, summary, rest)
+    var lines = []
+    if (!appendRequests(ctx, rest, cycle, lines)) appendSummaryTotal(ctx, summary, cycle, lines)
+    var ind = summary ? obj(summary.individualUsage) || {} : {}
+    var plan = obj(ind.plan) || {}
+    var auto = num(plan.autoPercentUsed)
+    if (auto !== null) lines.push(percentLine(ctx, "Cursor Models", auto, cycle))
+    var api = num(plan.apiPercentUsed)
+    if (api !== null) lines.push(percentLine(ctx, "Other Models", api, cycle))
+    if (summary) appendOnDemand(ctx, summary, cycle, lines)
+    return lines
   }
 
-  function buildTeamRequestBasedResult(ctx, accessToken, planName) {
-    return buildRequestBasedResult(
-      ctx,
-      accessToken,
-      planName,
-      "Team request-based usage data unavailable. Try again later."
-    )
+  function creditsFromStripe(stripe) {
+    var balance = stripe ? num(stripe.customerBalance) : null
+    return balance !== null && balance < 0 ? -balance : 0
   }
 
-  function buildUnknownRequestBasedResult(ctx, accessToken, planName) {
-    return buildRequestBasedResult(
-      ctx,
-      accessToken,
-      planName,
-      "Cursor request-based usage data unavailable. Try again later."
-    )
+  function grokUsageLine(ctx, u) {
+    if (u.usesPooledEnterpriseAllowance === true || u.hasNonZeroIncludedLimit === false || u.includedLimitZero === true) {
+      return null
+    }
+    var percent = num(u.usagePercent)
+    if (percent === null || percent < 0) return null
+    var reset = isoMs(ctx, u.nextResetTimestampUtc)
+    var start = isoMs(ctx, u.currentPeriodStart)
+    var periodMs = start !== null && reset !== null && reset > start ? Math.round(reset - start) : WEEK_MS
+    return ctx.line.progress({
+      label: "Grok Bot",
+      used: Math.min(Math.max(percent, 0), 100),
+      limit: 100,
+      format: { kind: "percent" },
+      resetsAt: reset === null ? null : ctx.util.toIso(reset),
+      periodDurationMs: periodMs
+    })
+  }
+
+  function normalizedMembership(value) {
+    var s = str(value)
+    return s ? s.toLowerCase() : null
+  }
+
+  function hasLabel(lines, labels) {
+    return lines.some(function (line) {
+      return labels.indexOf(line.label) >= 0
+    })
+  }
+
+  function restSend(ctx, session) {
+    var url = REST_USAGE_URL + "?user=" + encodeURIComponent(session ? session.userId : "")
+    return function () {
+      return cookieGet(ctx, url, session)
+    }
   }
 
   function probe(ctx) {
-    const authState = loadAuthState(ctx)
-    let accessToken = authState.accessToken
-    const refreshTokenValue = authState.refreshToken
-    const authSource = authState.source
+    var creds = ctx.account && ctx.account.credentials
+    if (!creds || !str(creds.accessToken)) throw SIGN_IN
 
-    if (!accessToken && !refreshTokenValue) {
-      ctx.host.log.error("probe failed: no access or refresh token in sqlite/keychain")
-      throw "Not logged in. " + LOGIN_HINT
-    }
-
-    ctx.host.log.info("tokens loaded from " + authSource + ": accessToken=" + (accessToken ? "yes" : "no") + " refreshToken=" + (refreshTokenValue ? "yes" : "no"))
-
-    const nowMs = Date.now()
-
-    // Proactively refresh if token is expired or about to expire
-    if (needsRefresh(ctx, accessToken, nowMs)) {
-      ctx.host.log.info("token needs refresh (expired or expiring soon)")
-      let refreshed = null
+    var nowMs = Date.parse(ctx.nowIso)
+    var current = creds
+    var expiresAt = numOr(creds.expiresAt, jwtExpMs(ctx, creds.accessToken))
+    if (expiresAt !== null && expiresAt - REFRESH_LEAD_MS <= nowMs) {
       try {
-        refreshed = refreshToken(ctx, refreshTokenValue, authSource)
+        current = refreshAccess(ctx, current)
       } catch (e) {
-        // If refresh fails but we have an access token, try it anyway
-        ctx.host.log.warn("refresh failed but have access token, will try: " + String(e))
-        if (!accessToken) throw e
-      }
-      if (refreshed) {
-        accessToken = refreshed
-      } else if (!accessToken) {
-        ctx.host.log.error("refresh failed and no access token available")
-        throw "Not logged in. " + LOGIN_HINT
+        if (expiresAt <= nowMs) throw e
+        ctx.host.log.warn("Cursor early token refresh failed; keeping the current token: " + String(e))
       }
     }
 
-    let usageResp
-    let didRefresh = false
-    try {
-      usageResp = ctx.util.retryOnceOnAuth({
-        request: (token) => {
-          try {
-            return connectPost(ctx, USAGE_URL, token || accessToken)
-          } catch (e) {
-            ctx.host.log.error("usage request exception: " + String(e))
-            if (didRefresh) {
-              throw "Usage request failed after refresh. Try again."
-            }
-            throw "Usage request failed. Check your connection."
-          }
-        },
-        refresh: () => {
-          ctx.host.log.info("usage returned 401, attempting refresh")
-          didRefresh = true
-          const refreshed = refreshToken(ctx, refreshTokenValue, authSource)
-          if (refreshed) accessToken = refreshed
-          return refreshed
-        },
-      })
-    } catch (e) {
-      if (typeof e === "string") throw e
-      ctx.host.log.error("usage request failed: " + String(e))
-      throw "Usage request failed. Check your connection."
-    }
-
-    if (ctx.util.isAuthStatus(usageResp.status)) {
-      ctx.host.log.error("usage returned auth error after all retries: status=" + usageResp.status)
-      throw "Token expired. " + LOGIN_HINT
-    }
-
+    var access = current.accessToken
+    var usageResp = ctx.util.retryOnceOnAuth({
+      request: function (token) {
+        if (token) access = token
+        return connectPost(ctx, USAGE_URL, access)
+      },
+      refresh: function () {
+        current = refreshAccess(ctx, current)
+        return current.accessToken
+      }
+    })
+    if (ctx.util.isAuthStatus(usageResp.status)) throw SIGN_IN
     if (usageResp.status < 200 || usageResp.status >= 300) {
-      ctx.host.log.error("usage returned error: status=" + usageResp.status)
-      throw "Usage request failed (HTTP " + String(usageResp.status) + "). Try again later."
+      throw "Cursor usage request failed (HTTP " + usageResp.status + "). Try again later."
     }
+    var usage = obj(ctx.util.tryParseJson(usageResp.bodyText))
+    if (!usage) throw "Cursor usage response was invalid. Try again later."
 
-    ctx.host.log.info("usage fetch succeeded")
+    var session = cursorSession(ctx, access)
+    var planBody = optionalJson(ctx, "plan", function () { return connectPost(ctx, PLAN_URL, access) })
+    var planInfo = planBody ? obj(planBody.planInfo) : null
+    var planName = planInfo ? str(planInfo.planName) : null
+    var summary = optionalJson(ctx, "usage-summary", function () { return cookieGet(ctx, USAGE_SUMMARY_URL, session) })
+    var membership = summary ? normalizedMembership(summary.membershipType) : null
+    var isOrgSeat = membership === "enterprise" || membership === "team"
 
-    const usage = ctx.util.tryParseJson(usageResp.bodyText)
-    if (usage === null) {
-      throw "Usage response invalid. Try again later."
-    }
-
-    // Fetch plan info early (needed for request-based fallback detection)
-    let planName = ""
-    let planInfoUnavailable = false
-    try {
-      const planResp = connectPost(ctx, PLAN_URL, accessToken)
-      if (planResp.status >= 200 && planResp.status < 300) {
-        const plan = ctx.util.tryParseJson(planResp.bodyText)
-        if (plan && plan.planInfo && plan.planInfo.planName) {
-          planName = plan.planInfo.planName
-        }
-      } else {
-        planInfoUnavailable = true
-        ctx.host.log.warn("plan info returned error: status=" + planResp.status)
-      }
-    } catch (e) {
-      planInfoUnavailable = true
-      ctx.host.log.warn("plan info fetch failed: " + String(e))
-    }
-
-    const normalizedPlanName = typeof planName === "string"
-      ? planName.toLowerCase()
-      : ""
-
-    const hasPlanUsage = !!usage.planUsage
-    const hasPlanUsageLimit = hasPlanUsage &&
-      typeof usage.planUsage.limit === "number" &&
-      Number.isFinite(usage.planUsage.limit)
-    const planUsageLimitMissing = hasPlanUsage && !hasPlanUsageLimit
-    const hasTotalUsagePercent = hasPlanUsage &&
-      typeof usage.planUsage.totalPercentUsed === "number" &&
-      Number.isFinite(usage.planUsage.totalPercentUsed)
-
-    // Enterprise and some Team request-based accounts can return no planUsage
-    // or a planUsage object without limit from the Connect API.
-    const needsRequestBasedFallback = usage.enabled !== false && (!hasPlanUsage || planUsageLimitMissing) && (
-      normalizedPlanName === "enterprise" ||
-      normalizedPlanName === "team"
-    )
-    if (needsRequestBasedFallback) {
-      if (normalizedPlanName === "enterprise") {
-        ctx.host.log.info("detected enterprise account, using REST usage API")
-        return buildEnterpriseResult(ctx, accessToken, planName)
-      }
-      ctx.host.log.info("detected team request-based account, using REST usage API")
-      return buildTeamRequestBasedResult(ctx, accessToken, planName)
-    }
-
-    const needsFallbackWithoutPlanInfo = usage.enabled !== false &&
-      (!hasPlanUsage || planUsageLimitMissing) &&
-      !hasTotalUsagePercent &&
-      !normalizedPlanName &&
-      planInfoUnavailable
-    if (needsFallbackWithoutPlanInfo) {
-      ctx.host.log.info("plan info unavailable with missing planUsage, attempting REST usage API fallback")
-      return buildUnknownRequestBasedResult(ctx, accessToken, planName)
-    }
-
-    if (usage.enabled !== false && planUsageLimitMissing && !hasTotalUsagePercent) {
-      ctx.host.log.warn("planUsage.limit missing, attempting REST usage API fallback")
-      try {
-        return buildUnknownRequestBasedResult(ctx, accessToken, planName)
-      } catch (e) {
-        ctx.host.log.warn("REST usage fallback unavailable: " + String(e))
+    var f = planFacts(usage)
+    var fallback = requestFallbackMessage(f, isOrgSeat ? membership : planName)
+    var lines = null
+    if (fallback !== null) {
+      var restUsage = optionalJson(ctx, "request-based usage", restSend(ctx, session))
+      lines = summaryLines(ctx, summary, restUsage)
+      if (lines.length === 0) throw fallback
+    } else if (f.shouldTryGenericRequestFallback) {
+      var generic = optionalJson(ctx, "request-based usage", restSend(ctx, session))
+      if (generic) {
+        var genericLines = summaryLines(ctx, null, generic)
+        if (genericLines.length > 0) lines = genericLines
       }
     }
 
-    // Team plans may omit `enabled` even with valid plan usage data.
-    if (usage.enabled === false || !usage.planUsage) {
-      throw "No active Cursor subscription."
-    }
-
-    let creditGrants = null
-    try {
-      const creditsResp = connectPost(ctx, CREDITS_URL, accessToken)
-      if (creditsResp.status >= 200 && creditsResp.status < 300) {
-        creditGrants = ctx.util.tryParseJson(creditsResp.bodyText)
-      }
-    } catch (e) {
-      ctx.host.log.warn("credit grants fetch failed: " + String(e))
-    }
-
-    const stripeBalanceCents = fetchStripeBalance(ctx, accessToken) || 0
-
-    let plan = null
-    if (planName) {
-      const planLabel = ctx.fmt.planLabel(planName)
-      if (planLabel) {
-        plan = planLabel
+    if (lines === null) {
+      var stripe = optionalJson(ctx, "prepaid-balance", function () { return cookieGet(ctx, STRIPE_URL, session) })
+      var credits = optionalJson(ctx, "credit-grants", function () { return connectPost(ctx, CREDITS_URL, access) })
+      lines = usageLines(ctx, usage, f, planName, credits, creditsFromStripe(stripe))
+      var needsOnDemand = !hasLabel(lines, ON_DEMAND_LABELS)
+      if (needsOnDemand && (isOrgSeat || f.isTeamByShape) && summary && hasUsableSummaryPayload(ctx, summary)) {
+        appendOnDemand(ctx, summary, summaryCycle(ctx, summary, null), lines)
       }
     }
 
-    const lines = []
-    const pu = usage.planUsage
+    var grok = optionalJson(ctx, "Grok Bot usage", function () { return connectPost(ctx, GROK_URL, access) })
+    var grokLine = grok ? grokUsageLine(ctx, grok) : null
+    if (grokLine) lines.push(grokLine)
 
-    // Credits first (if available) - highest priority primary metric
-    const hasCreditGrants = creditGrants && creditGrants.hasCreditGrants === true
-    const grantTotalCents = hasCreditGrants ? parseInt(creditGrants.totalCents, 10) : 0
-    const grantUsedCents = hasCreditGrants ? parseInt(creditGrants.usedCents, 10) : 0
-    const hasValidGrantData = hasCreditGrants &&
-      grantTotalCents > 0 &&
-      !isNaN(grantTotalCents) &&
-      !isNaN(grantUsedCents)
-    const combinedTotalCents = (hasValidGrantData ? grantTotalCents : 0) + stripeBalanceCents
+    var profile = optionalJson(ctx, "profile", function () { return cookieGet(ctx, PROFILE_URL, session) })
+    var email = profile ? str(profile.email) : null
+    if (email) ctx.account.setLabel(email)
 
-    if (combinedTotalCents > 0) {
-      lines.push(ctx.line.progress({
-        label: "Credits",
-        used: ctx.fmt.dollars(hasValidGrantData ? grantUsedCents : 0),
-        limit: ctx.fmt.dollars(combinedTotalCents),
-        format: { kind: "dollars" },
-      }))
-    }
-
-    // Total usage (always present) - fallback primary metric
-    if (!hasPlanUsageLimit && !hasTotalUsagePercent) {
-      throw "Total usage limit missing from API response."
-    }
-    const planUsed = hasPlanUsageLimit
-      ? (typeof pu.totalSpend === "number"
-        ? pu.totalSpend
-        : pu.limit - (pu.remaining ?? 0))
-      : 0
-    const computedPercentUsed = hasPlanUsageLimit && pu.limit > 0
-      ? (planUsed / pu.limit) * 100
-      : 0
-    const totalUsagePercent = hasTotalUsagePercent
-      ? pu.totalPercentUsed
-      : computedPercentUsed
-
-    // Calculate billing cycle period duration
-    var billingPeriodMs = 30 * 24 * 60 * 60 * 1000 // 30 days default
-    var cycleStart = Number(usage.billingCycleStart)
-    var cycleEnd = Number(usage.billingCycleEnd)
-    if (Number.isFinite(cycleStart) && Number.isFinite(cycleEnd) && cycleEnd > cycleStart) {
-      billingPeriodMs = cycleEnd - cycleStart // already in ms
-    }
-
-    const su = usage.spendLimitUsage
-    const isTeamAccount = (
-      normalizedPlanName === "team" ||
-      (su && su.limitType === "team") ||
-      (su && typeof su.pooledLimit === "number" && su.pooledLimit > 0)
-    )
-
-    if (isTeamAccount) {
-      if (!hasPlanUsageLimit) {
-        ctx.host.log.warn("team-inferred account missing planUsage.limit, attempting REST usage API fallback")
-        return buildUnknownRequestBasedResult(ctx, accessToken, planName)
-      }
-      lines.push(ctx.line.progress({
-        label: "Total usage",
-        used: ctx.fmt.dollars(planUsed),
-        limit: ctx.fmt.dollars(pu.limit),
-        format: { kind: "dollars" },
-        resetsAt: ctx.util.toIso(usage.billingCycleEnd),
-        periodDurationMs: billingPeriodMs
-      }))
-
-      if (typeof pu.bonusSpend === "number" && pu.bonusSpend > 0) {
-        lines.push(ctx.line.text({ label: "Bonus spend", value: "$" + String(ctx.fmt.dollars(pu.bonusSpend)) }))
-      }
-    } else {
-      lines.push(ctx.line.progress({
-        label: "Total usage",
-        used: totalUsagePercent,
-        limit: 100,
-        format: { kind: "percent" },
-        resetsAt: ctx.util.toIso(usage.billingCycleEnd),
-        periodDurationMs: billingPeriodMs
-      }))
-    }
-
-    if (typeof pu.autoPercentUsed === "number" && Number.isFinite(pu.autoPercentUsed)) {
-      lines.push(ctx.line.progress({
-        label: "Auto usage",
-        used: pu.autoPercentUsed,
-        limit: 100,
-        format: { kind: "percent" },
-        resetsAt: ctx.util.toIso(usage.billingCycleEnd),
-        periodDurationMs: billingPeriodMs
-      }))
-    }
-
-    if (typeof pu.apiPercentUsed === "number" && Number.isFinite(pu.apiPercentUsed)) {
-      lines.push(ctx.line.progress({
-        label: "API usage",
-        used: pu.apiPercentUsed,
-        limit: 100,
-        format: { kind: "percent" },
-        resetsAt: ctx.util.toIso(usage.billingCycleEnd),
-        periodDurationMs: billingPeriodMs
-      }))
-    }
-
-    // On-demand (if available) - not a primary candidate
-    if (su) {
-      const limit = su.individualLimit ?? su.pooledLimit ?? 0
-      const remaining = su.individualRemaining ?? su.pooledRemaining ?? 0
-      if (limit > 0) {
-        const used = limit - remaining
-        lines.push(ctx.line.progress({
-          label: "On-demand",
-          used: ctx.fmt.dollars(used),
-          limit: ctx.fmt.dollars(limit),
-          format: { kind: "dollars" },
-        }))
-      }
-    }
-
-    return { plan: plan, lines: lines }
+    var out = { lines: lines }
+    var resolved = resolvedPlanName(planName, membership)
+    if (resolved) out.plan = ctx.fmt.planLabel(resolved)
+    return out
   }
 
-  globalThis.__openusage_plugin = { id: "cursor", probe }
+  globalThis.__openusage_plugin = { id: "cursor", probe: probe }
 })()

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import type { ReactNode } from "react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -42,10 +42,27 @@ vi.mock("@dnd-kit/utilities", () => ({
 }))
 
 import { SettingsPage } from "@/pages/settings"
-import { WIDGET_METRIC_SUGESTAO } from "@/lib/settings"
+import type { PluginMeta } from "@/lib/plugin-types"
+
+function progressMeta(id: string, name: string, labels: string[]): PluginMeta {
+  return {
+    id,
+    name,
+    iconUrl: `${id}.svg`,
+    lines: labels.map((label) => ({ type: "progress" as const, label, scope: "overview" as const })),
+    primaryCandidates: labels,
+  }
+}
 
 const defaultProps = {
-  plugins: [{ id: "a", name: "Alpha", enabled: true }],
+  plugins: [
+    { id: "a", name: "Alpha", enabled: true },
+    { id: "b", name: "Beta", enabled: true },
+  ],
+  pluginsMeta: [
+    progressMeta("a", "Alpha", ["Session", "Weekly", "Sonnet"]),
+    progressMeta("b", "Beta", ["Extra"]),
+  ],
   onReorder: vi.fn(),
   onToggle: vi.fn(),
   autoUpdateInterval: 15 as const,
@@ -60,17 +77,12 @@ const defaultProps = {
   onStatsShortcutChange: vi.fn(),
   startOnLogin: false,
   onStartOnLoginChange: vi.fn(),
-  widgetLayout: "vertical" as const,
-  onWidgetLayoutChange: vi.fn(),
   widgetVisible: false,
   onWidgetVisibleChange: vi.fn(),
   widgetProviderIds: null,
   onWidgetProviderIdsChange: vi.fn(),
-  widgetMetric: null,
-  onWidgetMetricChange: vi.fn(),
-  widgetZoom: 1,
-  onWidgetZoomChange: vi.fn(),
-  availableMetrics: [] as string[],
+  widgetProviderMetrics: {},
+  onWidgetProviderMetricsChange: vi.fn(),
 }
 
 afterEach(() => {
@@ -221,7 +233,7 @@ describe("SettingsPage", () => {
     expect(onStartOnLoginChange).toHaveBeenCalledWith(true)
   })
 
-  it("toggles floating widget providers separately from enabled plugins", async () => {
+  it("toggles taskbar widget providers separately from enabled plugins", async () => {
     const onWidgetProviderIdsChange = vi.fn()
     render(
       <SettingsPage
@@ -247,56 +259,39 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Show or hide the stats popup")).toBeInTheDocument()
   })
 
-  it("adjusts widget zoom from +/- controls", async () => {
-    const onWidgetZoomChange = vi.fn()
+  it("shows each enabled provider's metrics in the widget tab", async () => {
+    render(<SettingsPage {...defaultProps} widgetProviderIds={["a"]} />)
+    await openTab("Widget")
+    expect(screen.getByText("Choose which providers and metrics appear on the taskbar.")).toBeInTheDocument()
+    expect(screen.getByLabelText("Session")).toBeInTheDocument()
+    expect(screen.getByLabelText("Extra")).toBeInTheDocument()
+  })
+
+  it("saves the metric selection for a provider from the widget tab", async () => {
+    const onWidgetProviderMetricsChange = vi.fn()
     render(
       <SettingsPage
         {...defaultProps}
-        widgetZoom={1}
-        onWidgetZoomChange={onWidgetZoomChange}
+        widgetProviderIds={["a"]}
+        onWidgetProviderMetricsChange={onWidgetProviderMetricsChange}
       />
     )
     await openTab("Widget")
-    expect(screen.getByText("100%")).toBeInTheDocument()
-    await userEvent.click(screen.getByRole("button", { name: "Increase widget zoom" }))
-    expect(onWidgetZoomChange).toHaveBeenCalledWith(1.05)
-    await userEvent.click(screen.getByRole("button", { name: "Decrease widget zoom" }))
-    expect(onWidgetZoomChange).toHaveBeenCalledWith(0.95)
+    await userEvent.click(screen.getByLabelText("Sonnet"))
+    expect(onWidgetProviderMetricsChange).toHaveBeenCalledWith({ a: ["Session", "Weekly", "Sonnet"] })
   })
 
-  it("selects a widget metric", async () => {
-    const onWidgetMetricChange = vi.fn()
+  it("does not change metrics of a provider that is hidden from the widget", async () => {
+    const onWidgetProviderMetricsChange = vi.fn()
     render(
       <SettingsPage
         {...defaultProps}
-        availableMetrics={["Weekly", "Total usage"]}
-        onWidgetMetricChange={onWidgetMetricChange}
+        widgetProviderIds={["a"]}
+        onWidgetProviderMetricsChange={onWidgetProviderMetricsChange}
       />
     )
     await openTab("Widget")
-    await userEvent.click(screen.getByRole("radio", { name: "Total usage" }))
-    expect(onWidgetMetricChange).toHaveBeenCalledWith("Total usage")
-  })
-
-  it("selects auto widget metric", async () => {
-    const onWidgetMetricChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        widgetMetric={WIDGET_METRIC_SUGESTAO}
-        onWidgetMetricChange={onWidgetMetricChange}
-      />
-    )
-    await openTab("Widget")
-    expect(screen.getByRole("radio", { name: "Auto" })).toHaveAttribute("aria-checked", "true")
-    await userEvent.click(screen.getByRole("radio", { name: "Auto" }))
-    expect(onWidgetMetricChange).toHaveBeenCalledWith(WIDGET_METRIC_SUGESTAO)
-  })
-
-  it("shows auto as the first widget metric option", async () => {
-    render(<SettingsPage {...defaultProps} availableMetrics={["Weekly"]} />)
-    await openTab("Widget")
-    const group = screen.getByRole("radiogroup", { name: "Widget metric" })
-    expect(within(group).getAllByRole("radio")[0]).toHaveAccessibleName("Auto")
+    await userEvent.click(screen.getByLabelText("Extra"))
+    expect(onWidgetProviderMetricsChange).not.toHaveBeenCalled()
   })
 })

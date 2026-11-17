@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "muse",
+  "name": "Muse Code",
+  "version": "0.0.1",
+  "entry": "plugin.js",
+  "icon": "icon.svg",
+  "brandColor": "#0866FF",
+  "links": [
+    {
+      "label": "Usage Dashboard",
+      "url": "https://dev.meta.ai/usage"
+    }
+  ],
+  "auth": {
+    "kind": "device",
+    "deviceUrl": "https://auth.meta.com/oidc/device/authorization/",
+    "tokenUrl": "https://auth.meta.com/oidc/device/token/",
+    "clientId": "1031625952748946",
+    "encoding": "form"
+  },
+  "lines": [
+    { "type": "progress", "label": "Session", "scope": "overview", "primaryOrder": 1 },
+    { "type": "progress", "label": "Weekly", "scope": "overview", "primaryOrder": 2 }
+  ]
+}

@@ -16,8 +16,9 @@ OpenUsage lives in your menu bar and shows you how much of your AI coding subscr
 
 - **One glance.** All your AI tools, one panel.
 - **Always up-to-date.** Refreshes automatically on a schedule you pick.
-- **Global shortcuts.** Separate customizable shortcuts to toggle the stats popup and the floating widget from anywhere.
-- **Floating widget.** Optional always-on-top, draggable strip with one compact line per provider. Toggle it from the tray or Settings; pick which providers and which metric (weekly/total/…) it shows; layout switches between vertical and horizontal.
+- **Sign in inside the app.** Add accounts in Settings → Accounts (browser sign-in, device code or API key). Several accounts per provider. No CLI files needed.
+- **Taskbar widget.** Usage lives right on the Windows taskbar, next to the clock: one icon per provider with Session / Weekly as used/expected, colored by pace. Hover for details, click for the stats panel, right-click for options. Pick providers and metric in Settings.
+- **Global shortcuts.** Separate customizable shortcuts to toggle the stats popup and the taskbar widget from anywhere.
 - **Dedicated Settings window.** Settings open in their own resizable window with custom Windows controls; the tray popup stays focused on your usage.
 - **Lightweight.** Opens instantly, stays out of your way.
 - **Plugin-based.** New providers get added without updating the whole app.
@@ -26,21 +27,31 @@ OpenUsage lives in your menu bar and shows you how much of your AI coding subscr
 
 ## Supported Providers
 
-- [**Amp**](docs/providers/amp.md) / free tier, bonus, credits
-- [**Antigravity**](docs/providers/antigravity.md) / all models
-- [**Claude**](docs/providers/claude.md) / session, weekly, extra usage, local token usage (ccusage)
-- [**Codex**](docs/providers/codex.md) / session, weekly, reviews, credits
-- [**Copilot**](docs/providers/copilot.md) / premium, chat, completions
-- [**Cursor**](docs/providers/cursor.md) / credits, total usage, auto usage, API usage, on-demand, CLI auth
+Sign in from Settings → Accounts:
+
+- [**Amp**](docs/providers/amp.md) / agent usage, Amp Free, Orb hours, credits (device code)
+- [**Antigravity**](docs/providers/antigravity.md) / Gemini, Claude and Argon windows (Google sign-in)
+- [**ChatGPT / Codex**](docs/providers/codex.md) / session, weekly, Spark, extra usage (browser sign-in)
+- [**Claude**](docs/providers/claude.md) / session, weekly, Sonnet, Fable, extra usage (browser sign-in)
+- [**Copilot**](docs/providers/copilot.md) / credits, chat, completions (GitHub device code)
+- [**Copilot Org**](docs/providers/copilot-org.md) / organization credits and spend (token)
+- [**Cursor**](docs/providers/cursor.md) / total usage, Cursor/other models, extra usage, credits (browser sign-in)
+- [**Devin**](docs/providers/devin.md) / daily, weekly, extra usage (browser sign-in)
+- [**Grok**](docs/providers/grok.md) / weekly, pay-as-you-go (device code)
+- [**Muse Code**](docs/providers/muse.md) / session, weekly (device code)
+- [**Ollama**](docs/providers/ollama.md) / session, weekly, monthly, credits, history (API key)
+- [**OpenCode**](docs/providers/opencode-go.md) / session, weekly, monthly (device code)
+- [**OpenRouter**](docs/providers/openrouter.md) / balance, spend history, key limits (API key)
+- [**Z.ai**](docs/providers/zai.md) / session, weekly, web searches (API key)
+
+Read from local files (enable in Settings → Plugins):
+
 - [**Factory / Droid**](docs/providers/factory.md) / standard, premium tokens
-- [**Grok**](docs/providers/grok.md) / credits used, plan, pay-as-you-go cap
 - [**JetBrains AI Assistant**](docs/providers/jetbrains-ai-assistant.md) / quota, remaining
 - [**Kiro**](docs/providers/kiro.md) / credits, bonus credits, overages
 - [**Kimi Code**](docs/providers/kimi.md) / session, weekly
 - [**MiniMax**](docs/providers/minimax.md) / coding plan session
-- [**OpenCode Go**](docs/providers/opencode-go.md) / 5h, weekly, monthly spend limits
-- [**Devin**](docs/providers/devin.md) / weekly quota, extra usage
-- [**Z.ai**](docs/providers/zai.md) / session, weekly, web searches
+- [**Synthetic**](docs/providers/synthetic.md) / rate limits, subscription
 
 Community contributions welcome.
 
@@ -123,4 +134,4 @@ For release builds with `.env` signing variables loaded:
 bun run build:release
 ```
 
-The app uses the Windows tray, Windows Credential Manager for supported plugin secrets, and bundled SQLite support. Provider support still depends on where each provider app stores credentials on Windows.
+The app uses the Windows tray and a native taskbar widget. Account tokens are encrypted with Windows DPAPI in the app data folder (`accounts/`).

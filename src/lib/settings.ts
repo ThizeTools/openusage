@@ -1,9 +1,5 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import type { PluginMeta } from "@/lib/plugin-types";
-import {
-  isWidgetZoom,
-  WIDGET_ZOOM_DEFAULT,
-} from "@/lib/widget-zoom";
 
 // Refresh cooldown duration in milliseconds (5 minutes)
 export const REFRESH_COOLDOWN_MS = 300_000;
@@ -22,21 +18,10 @@ export type ResetTimerDisplayMode = "relative" | "absolute";
 
 export type MenubarIconStyle = "provider" | "bars" | "donut";
 
-export type WidgetLayout = "vertical" | "horizontal";
-
-export type WidgetPosition = { x: number; y: number };
-
 export type WidgetProviderIds = string[] | null;
 
-/** Selected metric label shown in the widget; null = auto (weekly/total like the tray). */
-export type WidgetMetric = string | null;
-
-/** Pseudo-metric: each provider shows its most-used (most constrained) metric. */
-export const WIDGET_METRIC_MOST_USED = "__most-used__";
-/** Pseudo-metric: each provider shows all of its metrics at once. */
-export const WIDGET_METRIC_ALL = "__all__";
-/** Pseudo-metric: each provider shows the suggested metrics for the widget. */
-export const WIDGET_METRIC_SUGESTAO = "__sugestao__";
+/** Metric labels shown in the widget, per plugin id (account ids included), in the user's order. */
+export type WidgetProviderMetrics = Record<string, string[]>;
 
 export type GlobalShortcut = string | null;
 
@@ -51,12 +36,10 @@ const LEGACY_TRAY_SHOW_PERCENTAGE_KEY = "trayShowPercentage";
 const GLOBAL_SHORTCUT_KEY = "globalShortcut";
 const STATS_SHORTCUT_KEY = "statsShortcut";
 const START_ON_LOGIN_KEY = "startOnLogin";
-const WIDGET_LAYOUT_KEY = "widgetLayout";
-const WIDGET_VISIBLE_KEY = "widgetVisible";
-const WIDGET_POSITION_KEY = "widgetPosition";
+// New key: the old "widgetVisible" belonged to the floating widget.
+const WIDGET_VISIBLE_KEY = "taskbarWidgetVisible";
 const WIDGET_PROVIDER_IDS_KEY = "widgetProviderIds";
-const WIDGET_METRIC_KEY = "widgetMetric";
-const WIDGET_ZOOM_KEY = "widgetZoom";
+const WIDGET_PROVIDER_METRICS_KEY = "widgetProviderMetrics";
 
 export const DEFAULT_AUTO_UPDATE_INTERVAL: AutoUpdateIntervalMinutes = 15;
 export const DEFAULT_THEME_MODE: ThemeMode = "system";
@@ -65,23 +48,18 @@ export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = "provider";
 export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_STATS_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_START_ON_LOGIN = false;
-export const DEFAULT_WIDGET_LAYOUT: WidgetLayout = "vertical";
-export const DEFAULT_WIDGET_VISIBLE = false;
+export const DEFAULT_WIDGET_VISIBLE = true;
 export const DEFAULT_WIDGET_PROVIDER_IDS: WidgetProviderIds = null;
-export const DEFAULT_WIDGET_METRIC: WidgetMetric = WIDGET_METRIC_SUGESTAO;
-export { WIDGET_ZOOM_DEFAULT as DEFAULT_WIDGET_ZOOM } from "@/lib/widget-zoom";
+export const DEFAULT_WIDGET_PROVIDER_METRICS: WidgetProviderMetrics = {};
+
+export const SETTINGS_PLUGINS_CHANGED_EVENT = "settings:plugins-changed";
+export const SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT =
+  "settings:auto-update-interval-changed";
 
 const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [1, 5, 15, 30];
 const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 const RESET_TIMER_DISPLAY_MODES: ResetTimerDisplayMode[] = ["relative", "absolute"];
 const MENUBAR_ICON_STYLES: MenubarIconStyle[] = ["provider", "donut", "bars"];
-const WIDGET_LAYOUTS: WidgetLayout[] = ["vertical", "horizontal"];
-
-export const WIDGET_LAYOUT_OPTIONS: { value: WidgetLayout; label: string }[] = [
-  { value: "vertical", label: "Vertical" },
-  { value: "horizontal", label: "Horizontal" },
-];
-
 export const MENUBAR_ICON_STYLE_OPTIONS: { value: MenubarIconStyle; label: string }[] = [
   { value: "provider", label: "Plugin" },
   { value: "donut", label: "Donut" },
@@ -197,7 +175,10 @@ export function normalizePluginSettings(
 
   const disabled = settings.disabled.filter((id) => knownSet.has(id));
   for (const id of newlyAdded) {
-    if (!DEFAULT_ENABLED_PLUGINS.has(id) && !disabled.includes(id)) {
+    // Account instances ("<plugin>@<accountId>") are enabled when first seen:
+    // the user just signed in to them. Plain plugin ids keep the default list.
+    const enabledByDefault = DEFAULT_ENABLED_PLUGINS.has(id) || id.includes("@");
+    if (!enabledByDefault && !disabled.includes(id)) {
       disabled.push(id);
     }
   }
@@ -353,21 +334,6 @@ export async function saveStartOnLogin(value: boolean): Promise<void> {
   await store.save();
 }
 
-function isWidgetLayout(value: unknown): value is WidgetLayout {
-  return typeof value === "string" && WIDGET_LAYOUTS.includes(value as WidgetLayout);
-}
-
-export async function loadWidgetLayout(): Promise<WidgetLayout> {
-  const stored = await store.get<unknown>(WIDGET_LAYOUT_KEY);
-  if (isWidgetLayout(stored)) return stored;
-  return DEFAULT_WIDGET_LAYOUT;
-}
-
-export async function saveWidgetLayout(layout: WidgetLayout): Promise<void> {
-  await store.set(WIDGET_LAYOUT_KEY, layout);
-  await store.save();
-}
-
 export async function loadWidgetVisible(): Promise<boolean> {
   const stored = await store.get<unknown>(WIDGET_VISIBLE_KEY);
   if (typeof stored === "boolean") return stored;
@@ -376,28 +342,6 @@ export async function loadWidgetVisible(): Promise<boolean> {
 
 export async function saveWidgetVisible(value: boolean): Promise<void> {
   await store.set(WIDGET_VISIBLE_KEY, value);
-  await store.save();
-}
-
-function isWidgetPosition(value: unknown): value is WidgetPosition {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as WidgetPosition).x === "number" &&
-    typeof (value as WidgetPosition).y === "number" &&
-    Number.isFinite((value as WidgetPosition).x) &&
-    Number.isFinite((value as WidgetPosition).y)
-  );
-}
-
-export async function loadWidgetPosition(): Promise<WidgetPosition | null> {
-  const stored = await store.get<unknown>(WIDGET_POSITION_KEY);
-  if (isWidgetPosition(stored)) return stored;
-  return null;
-}
-
-export async function saveWidgetPosition(position: WidgetPosition): Promise<void> {
-  await store.set(WIDGET_POSITION_KEY, position);
   await store.save();
 }
 
@@ -417,28 +361,24 @@ export async function saveWidgetProviderIds(ids: WidgetProviderIds): Promise<voi
   await store.save();
 }
 
-function isWidgetMetric(value: unknown): value is WidgetMetric {
-  return value === null || typeof value === "string";
+/** Keeps only the entries whose value is a list of strings; anything else is dropped. */
+export function parseWidgetProviderMetrics(value: unknown): WidgetProviderMetrics {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result: WidgetProviderMetrics = {};
+  for (const [id, labels] of Object.entries(value)) {
+    if (Array.isArray(labels) && labels.every((label) => typeof label === "string")) {
+      result[id] = labels;
+    }
+  }
+  return result;
 }
 
-export async function loadWidgetMetric(): Promise<WidgetMetric> {
-  const stored = await store.get<unknown>(WIDGET_METRIC_KEY);
-  if (isWidgetMetric(stored)) return stored;
-  return DEFAULT_WIDGET_METRIC;
+export async function loadWidgetProviderMetrics(): Promise<WidgetProviderMetrics> {
+  const stored = await store.get<unknown>(WIDGET_PROVIDER_METRICS_KEY);
+  return parseWidgetProviderMetrics(stored);
 }
 
-export async function saveWidgetMetric(metric: WidgetMetric): Promise<void> {
-  await store.set(WIDGET_METRIC_KEY, metric);
-  await store.save();
-}
-
-export async function loadWidgetZoom(): Promise<number> {
-  const stored = await store.get<unknown>(WIDGET_ZOOM_KEY);
-  if (isWidgetZoom(stored)) return stored;
-  return WIDGET_ZOOM_DEFAULT;
-}
-
-export async function saveWidgetZoom(zoom: number): Promise<void> {
-  await store.set(WIDGET_ZOOM_KEY, zoom);
+export async function saveWidgetProviderMetrics(metrics: WidgetProviderMetrics): Promise<void> {
+  await store.set(WIDGET_PROVIDER_METRICS_KEY, metrics);
   await store.save();
 }

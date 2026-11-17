@@ -17,7 +17,6 @@ const {
   loadResetTimerDisplayModeMock,
   loadStartOnLoginMock,
   loadThemeModeMock,
-  loadWidgetLayoutMock,
   loadWidgetProviderIdsMock,
   loadWidgetVisibleMock,
   migrateLegacyTraySettingsMock,
@@ -40,7 +39,6 @@ const {
   loadResetTimerDisplayModeMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
   loadThemeModeMock: vi.fn(),
-  loadWidgetLayoutMock: vi.fn(),
   loadWidgetProviderIdsMock: vi.fn(),
   loadWidgetVisibleMock: vi.fn(),
   migrateLegacyTraySettingsMock: vi.fn(),
@@ -66,10 +64,10 @@ vi.mock("@/lib/settings", () => ({
   DEFAULT_DISPLAY_MODE: "left",
   DEFAULT_GLOBAL_SHORTCUT: null,
   DEFAULT_MENUBAR_ICON_STYLE: "provider",
+  DEFAULT_PLUGIN_SETTINGS: { order: [], disabled: [] },
   DEFAULT_RESET_TIMER_DISPLAY_MODE: "relative",
   DEFAULT_START_ON_LOGIN: false,
   DEFAULT_THEME_MODE: "system",
-  DEFAULT_WIDGET_LAYOUT: "vertical",
   DEFAULT_WIDGET_PROVIDER_IDS: null,
   DEFAULT_WIDGET_VISIBLE: false,
   getEnabledPluginIds: getEnabledPluginIdsMock,
@@ -81,7 +79,6 @@ vi.mock("@/lib/settings", () => ({
   loadResetTimerDisplayMode: loadResetTimerDisplayModeMock,
   loadStartOnLogin: loadStartOnLoginMock,
   loadThemeMode: loadThemeModeMock,
-  loadWidgetLayout: loadWidgetLayoutMock,
   loadWidgetProviderIds: loadWidgetProviderIdsMock,
   loadWidgetVisible: loadWidgetVisibleMock,
   migrateLegacyTraySettings: migrateLegacyTraySettingsMock,
@@ -103,7 +100,6 @@ function createArgs() {
     setGlobalShortcut: vi.fn(),
     setStartOnLogin: vi.fn(),
     setMenubarIconStyle: vi.fn(),
-    setWidgetLayout: vi.fn(),
     setWidgetVisible: vi.fn(),
     setWidgetProviderIds: vi.fn(),
     setLoadingForPlugins: vi.fn(),
@@ -129,7 +125,6 @@ describe("useSettingsBootstrap", () => {
     loadResetTimerDisplayModeMock.mockReset()
     loadStartOnLoginMock.mockReset()
     loadThemeModeMock.mockReset()
-    loadWidgetLayoutMock.mockReset()
     loadWidgetProviderIdsMock.mockReset()
     loadWidgetVisibleMock.mockReset()
     migrateLegacyTraySettingsMock.mockReset()
@@ -150,7 +145,11 @@ describe("useSettingsBootstrap", () => {
       },
     ])
     loadPluginSettingsMock.mockResolvedValue({ order: ["codex"], disabled: [] })
-    normalizePluginSettingsMock.mockImplementation((stored) => stored)
+    normalizePluginSettingsMock.mockImplementation((stored, plugins) =>
+      stored.order.length > 0
+        ? stored
+        : { order: plugins.map((plugin: { id: string }) => plugin.id), disabled: [] }
+    )
     arePluginSettingsEqualMock.mockReturnValue(true)
     loadAutoUpdateIntervalMock.mockResolvedValue(15)
     loadThemeModeMock.mockResolvedValue("dark")
@@ -159,7 +158,6 @@ describe("useSettingsBootstrap", () => {
     loadGlobalShortcutMock.mockResolvedValue("CommandOrControl+Shift+O")
     loadMenubarIconStyleMock.mockResolvedValue("provider")
     loadStartOnLoginMock.mockResolvedValue(true)
-    loadWidgetLayoutMock.mockResolvedValue("vertical")
     loadWidgetProviderIdsMock.mockResolvedValue(null)
     loadWidgetVisibleMock.mockResolvedValue(false)
     migrateLegacyTraySettingsMock.mockResolvedValue(undefined)
@@ -215,8 +213,12 @@ describe("useSettingsBootstrap", () => {
     invokeMock.mockResolvedValueOnce(availablePlugins)
     loadPluginSettingsMock.mockResolvedValueOnce(storedSettings)
     migrateWindsurfToDevinMock.mockReturnValueOnce(migratedSettings)
-    normalizePluginSettingsMock.mockReturnValueOnce(migratedSettings)
-    arePluginSettingsEqualMock.mockReturnValueOnce(false)
+    normalizePluginSettingsMock
+      .mockReturnValueOnce(migratedSettings)
+      .mockReturnValueOnce(migratedSettings)
+    arePluginSettingsEqualMock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
     getEnabledPluginIdsMock.mockReturnValueOnce(["devin"])
 
     renderHook(() => useSettingsBootstrap(args))
@@ -230,5 +232,81 @@ describe("useSettingsBootstrap", () => {
       expect(args.setPluginSettings).toHaveBeenCalledWith(migratedSettings)
       expect(args.startBatch).toHaveBeenCalledWith(["devin"])
     })
+  })
+
+  it("publishes plugin settings before loading non-critical preferences", async () => {
+    const args = createArgs()
+    loadAutoUpdateIntervalMock.mockReturnValueOnce(new Promise(() => {}))
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(args.setPluginsMeta).toHaveBeenCalled()
+      expect(args.setPluginSettings).toHaveBeenCalledWith({
+        order: ["codex"],
+        disabled: [],
+      })
+      expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["codex"])
+      expect(args.startBatch).toHaveBeenCalledWith(["codex"])
+    })
+    expect(args.setAutoUpdateInterval).not.toHaveBeenCalled()
+  })
+
+  it("publishes default plugin settings before stored settings load", async () => {
+    const args = createArgs()
+    loadPluginSettingsMock.mockReturnValueOnce(new Promise(() => {}))
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(args.setPluginsMeta).toHaveBeenCalled()
+      expect(args.setPluginSettings).toHaveBeenCalledWith({
+        order: ["codex"],
+        disabled: [],
+      })
+      expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["codex"])
+      expect(args.startBatch).toHaveBeenCalledWith(["codex"])
+    })
+    expect(loadAutoUpdateIntervalMock).not.toHaveBeenCalled()
+  })
+
+  it("retries transient provider discovery failures", async () => {
+    const args = createArgs()
+    const availablePlugins = [
+      {
+        id: "codex",
+        name: "Codex",
+        iconUrl: "/codex.svg",
+        brandColor: "#000000",
+        lines: [],
+        primaryCandidates: [],
+      },
+    ]
+    invokeMock
+      .mockRejectedValueOnce(new Error("provider list not ready"))
+      .mockResolvedValueOnce(availablePlugins)
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledTimes(2)
+      expect(args.setPluginsMeta).toHaveBeenCalledWith(availablePlugins)
+    })
+  })
+
+  it("exposes a provider load error after discovery retries are exhausted", async () => {
+    const args = createArgs()
+    const error = new Error("provider list unavailable")
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    invokeMock.mockRejectedValue(error)
+
+    const { result } = renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(result.current.pluginLoadError).toBe("Failed to load providers")
+    })
+    expect(errorSpy).toHaveBeenCalledWith("Failed to load providers:", error)
+    expect(args.setPluginSettings).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 })

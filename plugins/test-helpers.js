@@ -373,3 +373,24 @@ export const makePluginTestContext = (overrides = {}) => {
   const ctx = makeCtx()
   return mergeInto(ctx, overrides)
 }
+
+/**
+ * Mock `ctx.account` for account-based plugins (plugin.json has `auth`).
+ * Usage: `ctx.account = makeAccount({ access_token: "a", refresh_token: "r" })`.
+ * `saveCredentials` receives a JSON string; the latest saved value is parsed
+ * into `account.saved`.
+ */
+export const makeAccount = (credentials = {}, label = "Account") => {
+  const account = {
+    id: "acc12345",
+    label,
+    credentials: JSON.parse(JSON.stringify(credentials)),
+    saved: null,
+    saveCredentials: vi.fn((json) => {
+      account.saved = JSON.parse(json)
+      return true
+    }),
+    setLabel: vi.fn(),
+  }
+  return account
+}

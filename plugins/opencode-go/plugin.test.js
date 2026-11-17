@@ -1,266 +1,223 @@
-import { readFileSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeCtx } from "../test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeAccount, makeCtx } from "../test-helpers.js";
 
-const AUTH_PATH = "~/.local/share/opencode/auth.json";
+const SIGN_IN = "Sign in again in Settings → Accounts.";
 
 const loadPlugin = async () => {
   await import("./plugin.js");
   return globalThis.__openusage_plugin;
 };
 
-function setAuth(ctx, value = "go-key") {
-  ctx.host.fs.writeText(
-    AUTH_PATH,
-    JSON.stringify({
-      "opencode-go": { type: "api-key", key: value },
-    }),
-  );
-}
+const json = (status, body) => ({ status, headers: {}, bodyText: JSON.stringify(body) });
 
-function setHistoryQuery(ctx, rows, options = {}) {
-  const list = Array.isArray(rows) ? rows : [];
-  ctx.host.sqlite.query.mockImplementation((dbPath, sql) => {
-    expect(dbPath).toBe("~/.local/share/opencode/opencode.db");
+const inHours = (h) => new Date(Date.now() + h * 3600 * 1000).toISOString();
 
-    if (String(sql).includes("SELECT 1 AS present")) {
-      if (options.assertFilters !== false) {
-        expect(String(sql)).toContain(
-          "json_extract(data, '$.providerID') = 'opencode-go'",
-        );
-        expect(String(sql)).toContain(
-          "json_extract(data, '$.role') = 'assistant'",
-        );
-        expect(String(sql)).toContain(
-          "json_type(data, '$.cost') IN ('integer', 'real')",
-        );
-      }
-      return JSON.stringify(list.length > 0 ? [{ present: 1 }] : []);
-    }
+const USAGE_BODY = {
+  usage: {
+    rolling: { percent: 25, resetsAt: inHours(3) },
+    weekly: { percent: 40, resetsAt: inHours(48) },
+    monthly: { percent: 10, resetsAt: inHours(400) },
+  },
+};
 
-    if (options.assertFilters !== false) {
-      expect(String(sql)).toContain(
-        "json_extract(data, '$.providerID') = 'opencode-go'",
-      );
-      expect(String(sql)).toContain(
-        "json_extract(data, '$.role') = 'assistant'",
-      );
-      expect(String(sql)).toContain(
-        "json_type(data, '$.cost') IN ('integer', 'real')",
-      );
-      expect(String(sql)).toContain(
-        "COALESCE(json_extract(data, '$.time.created'), time_created)",
-      );
-    }
+// Runs a sync probe and returns what it threw.
+const thrown = (fn) => {
+  try {
+    fn();
+  } catch (e) {
+    return e;
+  }
+  throw new Error("expected probe to throw");
+};
 
-    return JSON.stringify(list);
+// Routes ctx.host.http.request by "METHOD url". Unlisted routes fail the test.
+const routeHttp = (ctx, routes) => {
+  ctx.host.http.request.mockImplementation((opts) => {
+    const key = (opts.method || "GET") + " " + opts.url;
+    if (!(key in routes)) throw new Error("unexpected request " + key);
+    const r = routes[key];
+    return typeof r === "function" ? r(opts) : r;
   });
-}
+};
+
+const FUTURE = () => Date.now() + 3600 * 1000;
 
 describe("opencode-go plugin", () => {
-  beforeEach(() => {
-    delete globalThis.__openusage_plugin;
-    vi.resetModules();
+  let ctx;
+  let probe;
+
+  beforeEach(async () => {
+    ctx = makeCtx();
+    probe = (await loadPlugin()).probe;
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
+  it("throws the sign-in message without credentials", () => {
+    ctx.account = makeAccount({});
+    expect(thrown(() => probe(ctx))).toBe(SIGN_IN);
+    expect(ctx.host.http.request).not.toHaveBeenCalled();
   });
 
-  it("ships plugin metadata with links and expected line layout", () => {
-    const manifest = JSON.parse(
-      readFileSync("plugins/opencode-go/plugin.json", "utf8"),
-    );
+  it("returns session, weekly and monthly lines with the plan and account label", () => {
+    ctx.account = makeAccount({ access_token: "tok", org_id: "org_1", expiresAt: FUTURE() });
+    routeHttp(ctx, {
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(200, USAGE_BODY),
+      [`GET https://opencode.ai/console/api/go/status`]: json(200, { product: "go" }),
+      [`GET https://opencode.ai/console/api/user`]: json(200, { id: "u1", email: "me@example.com" }),
+    });
 
-    expect(manifest.id).toBe("opencode-go");
-    expect(manifest.name).toBe("OpenCode Go");
-    expect(manifest.brandColor).toBe("#000000");
-    expect(manifest.links).toEqual([
-      { label: "Console", url: "https://opencode.ai/auth" },
-      { label: "Docs", url: "https://opencode.ai/docs/go/" },
-    ]);
-    expect(manifest.lines).toEqual([
-      { type: "progress", label: "Session", scope: "overview", primaryOrder: 1 },
-      { type: "progress", label: "Weekly", scope: "overview" },
-      { type: "progress", label: "Monthly", scope: "detail" },
-    ]);
-  });
-
-  it("throws when neither auth nor local history is present", async () => {
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, []);
-
-    const plugin = await loadPlugin();
-    expect(() => plugin.probe(ctx)).toThrow(
-      "OpenCode Go not detected. Log in with OpenCode Go or use it locally first.",
-    );
-  });
-
-  it("enables with auth only and returns zeroed bars", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setAuth(ctx);
-    setHistoryQuery(ctx, []);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
+    const result = probe(ctx);
 
     expect(result.plan).toBe("Go");
-    expect(result.lines.map((line) => line.label)).toEqual([
-      "Session",
-      "Weekly",
-      "Monthly",
-    ]);
-    expect(result.lines.every((line) => line.used === 0)).toBe(true);
-    expect(result.lines[0].resetsAt).toBe("2026-03-06T17:00:00.000Z");
-    expect(result.lines[1].resetsAt).toBe("2026-03-09T00:00:00.000Z");
-    expect(result.lines[2].resetsAt).toBe("2026-04-01T00:00:00.000Z");
+    expect(result.lines.map((l) => l.label)).toEqual(["Session", "Weekly", "Monthly"]);
+    expect(result.lines[0]).toMatchObject({ type: "progress", used: 25, limit: 100, periodDurationMs: 5 * 3600 * 1000 });
+    expect(result.lines[1]).toMatchObject({ used: 40, periodDurationMs: 7 * 24 * 3600 * 1000 });
+    expect(result.lines[2]).toMatchObject({ used: 10 });
+    expect(ctx.account.setLabel).toHaveBeenCalledWith("me@example.com");
+
+    const usageCall = ctx.host.http.request.mock.calls.find(([o]) => o.url.endsWith("/usage"))[0];
+    expect(usageCall.headers.Authorization).toBe("Bearer tok");
+    expect(usageCall.headers["x-opencode-org-id"]).toBe("org_1");
   });
 
-  it("enables with history only when auth is absent", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-03-06T11:00:00.000Z"), cost: 3 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-
-    expect(result.plan).toBe("Go");
-    expect(result.lines[0].used).toBe(25);
-  });
-
-  it("uses row timestamp fallback when JSON timestamp is missing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-03-06T09:30:00.000Z"), cost: 1.2 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-
-    expect(result.lines[0].used).toBe(10);
-    expect(result.lines[0].resetsAt).toBe("2026-03-06T14:30:00.000Z");
-  });
-
-  it("counts only the rolling 5h window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-03-06T06:30:00.000Z"), cost: 9 },
-      { createdMs: Date.parse("2026-03-06T08:00:00.000Z"), cost: 2.4 },
-      { createdMs: Date.parse("2026-03-06T10:00:00.000Z"), cost: 1.2 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-
-    expect(result.lines[0].used).toBe(30);
-    expect(result.lines[0].resetsAt).toBe("2026-03-06T13:00:00.000Z");
-  });
-
-  it("uses UTC Monday boundaries for weekly aggregation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-03-01T23:59:59.000Z"), cost: 10 },
-      { createdMs: Date.parse("2026-03-02T00:00:00.000Z"), cost: 6 },
-      { createdMs: Date.parse("2026-03-05T09:00:00.000Z"), cost: 3 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-    const weeklyLine = result.lines.find((line) => line.label === "Weekly");
-
-    expect(weeklyLine.used).toBe(30);
-    expect(weeklyLine.resetsAt).toBe("2026-03-09T00:00:00.000Z");
-  });
-
-  it("uses the earliest local usage timestamp as the monthly anchor", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-02-25T07:53:16.000Z"), cost: 2.181 },
-      { createdMs: Date.parse("2026-03-01T00:00:00.000Z"), cost: 0.2 },
-      { createdMs: Date.parse("2026-03-04T12:00:00.000Z"), cost: 0.2904 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-    const monthlyLine = result.lines.find((line) => line.label === "Monthly");
-
-    expect(monthlyLine.used).toBe(4.5);
-    expect(monthlyLine.resetsAt).toBe("2026-03-25T07:53:16.000Z");
-    expect(monthlyLine.periodDurationMs).toBe(28 * 24 * 60 * 60 * 1000);
-  });
-
-  it("clamps percentages at 100", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-
-    const ctx = makeCtx();
-    setHistoryQuery(ctx, [
-      { createdMs: Date.parse("2026-03-06T11:00:00.000Z"), cost: 40 },
-    ]);
-
-    const plugin = await loadPlugin();
-    const result = plugin.probe(ctx);
-
-    expect(result.lines[0].used).toBe(100);
-  });
-
-  it("returns a soft empty state when sqlite is unreadable but auth exists", async () => {
-    const ctx = makeCtx();
-    setAuth(ctx);
-    ctx.host.sqlite.query.mockImplementation(() => {
-      throw new Error("disk I/O error");
+  it("refreshes before expiry and saves the merged credentials", () => {
+    ctx.account = makeAccount({
+      access_token: "old",
+      refresh_token: "r1",
+      org_id: "org_1",
+      expiresAt: Date.now() + 60 * 1000,
+    });
+    routeHttp(ctx, {
+      [`POST https://opencode.ai/console/auth/device/token`]: json(200, {
+        access_token: "new",
+        expires_in: 3600,
+      }),
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(200, USAGE_BODY),
+      [`GET https://opencode.ai/console/api/go/status`]: json(200, { product: "go-plus" }),
+      [`GET https://opencode.ai/console/api/user`]: json(200, { id: "u1", email: "me@example.com" }),
     });
 
-    const plugin = await loadPlugin();
-    expect(plugin.probe(ctx)).toEqual({
-      plan: "Go",
-      lines: [
-        {
-          type: "badge",
-          label: "Status",
-          text: "No usage data",
-          color: "#a3a3a3",
+    const result = probe(ctx);
+
+    expect(result.plan).toBe("Go Plus");
+    const tokenCall = ctx.host.http.request.mock.calls.find(([o]) => o.method === "POST")[0];
+    expect(tokenCall.bodyText).toContain("grant_type=refresh_token");
+    expect(tokenCall.bodyText).toContain("refresh_token=r1");
+    expect(tokenCall.bodyText).toContain("client_id=opencode-cli");
+
+    expect(ctx.account.saveCredentials).toHaveBeenCalledTimes(1);
+    const saved = ctx.account.saved;
+    expect(saved.access_token).toBe("new");
+    expect(saved.refresh_token).toBe("r1");
+    expect(saved.org_id).toBe("org_1");
+    expect(saved.expiresAt).toBeGreaterThan(Date.now() + 3500 * 1000);
+    expect(typeof saved.obtainedAt).toBe("number");
+
+    const usageCall = ctx.host.http.request.mock.calls.find(([o]) => o.url.endsWith("/usage"))[0];
+    expect(usageCall.headers.Authorization).toBe("Bearer new");
+  });
+
+  it("renews once after a 401 and retries with the new token", () => {
+    ctx.account = makeAccount({ access_token: "old", refresh_token: "r1", org_id: "org_1", expiresAt: FUTURE() });
+    routeHttp(ctx, {
+      [`GET https://opencode.ai/zen/go/v1/usage`]: (opts) =>
+        opts.headers.Authorization === "Bearer new" ? json(200, USAGE_BODY) : json(401, {}),
+      [`POST https://opencode.ai/console/auth/device/token`]: json(200, {
+        access_token: "new",
+        refresh_token: "r2",
+        expires_in: 3600,
+      }),
+      [`GET https://opencode.ai/console/api/go/status`]: json(500, {}),
+      [`GET https://opencode.ai/console/api/user`]: json(200, { id: "u1", email: "me@example.com" }),
+    });
+
+    const result = probe(ctx);
+
+    expect(result.lines).toHaveLength(3);
+    expect(result.plan).toBeUndefined();
+    expect(ctx.account.saved.refresh_token).toBe("r2");
+    expect(ctx.host.http.request.mock.calls.filter(([o]) => o.url.endsWith("/usage"))).toHaveLength(2);
+  });
+
+  it("throws the sign-in message on 401 when there is no refresh token", () => {
+    ctx.account = makeAccount({ access_token: "old", org_id: "org_1", expiresAt: FUTURE() });
+    routeHttp(ctx, {
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(401, {}),
+    });
+
+    expect(thrown(() => probe(ctx))).toBe(SIGN_IN);
+    expect(ctx.account.saveCredentials).not.toHaveBeenCalled();
+  });
+
+  it("throws the sign-in message when an expired token's refresh is refused", () => {
+    ctx.account = makeAccount({
+      access_token: "old",
+      refresh_token: "r1",
+      org_id: "org_1",
+      expiresAt: Date.now() - 1000,
+    });
+    routeHttp(ctx, {
+      [`POST https://opencode.ai/console/auth/device/token`]: json(400, { error: "invalid_grant" }),
+    });
+
+    expect(thrown(() => probe(ctx))).toBe(SIGN_IN);
+  });
+
+  it("keeps the current token when an early renewal fails and the token is still valid", () => {
+    ctx.account = makeAccount({
+      access_token: "old",
+      refresh_token: "r1",
+      org_id: "org_1",
+      expiresAt: Date.now() + 60 * 1000,
+    });
+    routeHttp(ctx, {
+      [`POST https://opencode.ai/console/auth/device/token`]: json(500, {}),
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(200, USAGE_BODY),
+      [`GET https://opencode.ai/console/api/go/status`]: json(200, { product: "go" }),
+      [`GET https://opencode.ai/console/api/user`]: json(200, {}),
+    });
+
+    const result = probe(ctx);
+
+    expect(result.lines).toHaveLength(3);
+    expect(ctx.host.log.warn).toHaveBeenCalled();
+    expect(ctx.account.saveCredentials).not.toHaveBeenCalled();
+  });
+
+  it("shows a badge when the account has no OpenCode Go entitlement", () => {
+    ctx.account = makeAccount({ access_token: "tok", org_id: "org_1", expiresAt: FUTURE() });
+    routeHttp(ctx, {
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(403, {
+        error: { type: "EntitlementError" },
+      }),
+      [`GET https://opencode.ai/console/api/user`]: json(200, {}),
+    });
+
+    const result = probe(ctx);
+
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0]).toMatchObject({
+      type: "badge",
+      text: "No OpenCode Go subscription on this account.",
+    });
+  });
+
+  it("omits the session reset while the rolling window is untouched", () => {
+    ctx.account = makeAccount({ access_token: "tok", org_id: "org_1", expiresAt: FUTURE() });
+    routeHttp(ctx, {
+      [`GET https://opencode.ai/zen/go/v1/usage`]: json(200, {
+        usage: {
+          rolling: { percent: 0, resetsAt: new Date(Date.now() + 5 * 3600 * 1000).toISOString() },
+          weekly: { percent: 0, resetsAt: inHours(48) },
+          monthly: { percent: 0, resetsAt: inHours(400) },
         },
-      ],
+      }),
+      [`GET https://opencode.ai/console/api/go/status`]: json(200, { product: "go" }),
+      [`GET https://opencode.ai/console/api/user`]: json(200, {}),
     });
-  });
 
-  it("returns a soft empty state when sqlite returns malformed JSON and auth exists", async () => {
-    const ctx = makeCtx();
-    setAuth(ctx);
-    ctx.host.sqlite.query.mockReturnValue("not-json");
+    const result = probe(ctx);
 
-    const plugin = await loadPlugin();
-    expect(plugin.probe(ctx)).toEqual({
-      plan: "Go",
-      lines: [
-        {
-          type: "badge",
-          label: "Status",
-          text: "No usage data",
-          color: "#a3a3a3",
-        },
-      ],
-    });
+    expect(result.lines[0].resetsAt).toBeUndefined();
+    expect(result.lines[1].resetsAt).toBeDefined();
   });
 });

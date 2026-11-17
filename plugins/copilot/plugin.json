@@ -5,10 +5,19 @@
   "version": "0.0.1",
   "entry": "plugin.js",
   "icon": "icon.svg",
-  "brandColor": "#A855F7",
+  "brandColor": "#8534F3",
+  "auth": {
+    "kind": "device",
+    "deviceUrl": "https://github.com/login/device/code",
+    "tokenUrl": "https://github.com/login/oauth/access_token",
+    "clientId": "Iv1.b507a08c87ecfe98",
+    "scope": "read:user",
+    "encoding": "form"
+  },
   "lines": [
-    { "type": "progress", "label": "Premium", "scope": "overview", "primaryOrder": 1 },
+    { "type": "progress", "label": "Credits", "scope": "overview", "primaryOrder": 1 },
     { "type": "progress", "label": "Chat", "scope": "overview", "primaryOrder": 2 },
-    { "type": "progress", "label": "Completions", "scope": "overview" }
+    { "type": "progress", "label": "Completions", "scope": "overview" },
+    { "type": "text", "label": "Extra Usage", "scope": "detail" }
   ]
 }

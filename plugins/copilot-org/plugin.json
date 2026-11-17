@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "copilot-org",
+  "name": "Copilot Org",
+  "version": "0.0.1",
+  "entry": "plugin.js",
+  "icon": "icon.svg",
+  "brandColor": "#8534F3",
+  "auth": {
+    "kind": "api-key",
+    "keyUrl": "https://github.com/settings/tokens",
+    "fields": [
+      { "name": "org", "label": "Organization", "secret": false },
+      { "name": "token", "label": "Token", "secret": true }
+    ]
+  },
+  "lines": [
+    { "type": "text", "label": "Org Credits", "scope": "overview" },
+    { "type": "text", "label": "Org Spend", "scope": "overview" }
+  ]
+}

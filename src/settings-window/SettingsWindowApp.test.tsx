@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   keyChangeHandlers: {} as Record<string, (value: unknown) => void>,
   eventHandlers: {} as Record<string, (event: { payload: unknown }) => void>,
   invokeMock: vi.fn(),
+  emitMock: vi.fn(),
   isTauriMock: vi.fn(() => true),
   minimizeMock: vi.fn(),
   toggleMaximizeMock: vi.fn(),
@@ -28,15 +29,11 @@ const state = vi.hoisted(() => ({
   saveStatsShortcutMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
   saveStartOnLoginMock: vi.fn(),
-  loadWidgetLayoutMock: vi.fn(),
-  saveWidgetLayoutMock: vi.fn(),
   loadWidgetVisibleMock: vi.fn(),
   loadWidgetProviderIdsMock: vi.fn(),
   saveWidgetProviderIdsMock: vi.fn(),
-  loadWidgetMetricMock: vi.fn(),
-  saveWidgetMetricMock: vi.fn(),
-  loadWidgetZoomMock: vi.fn(),
-  saveWidgetZoomMock: vi.fn(),
+  loadWidgetProviderMetricsMock: vi.fn(),
+  saveWidgetProviderMetricsMock: vi.fn(),
 }))
 
 vi.mock("@dnd-kit/core", () => ({
@@ -112,7 +109,7 @@ vi.mock("@tauri-apps/api/event", () => ({
       delete state.eventHandlers[name]
     }
   },
-  emit: vi.fn(async () => {}),
+  emit: state.emitMock,
 }))
 
 vi.mock("@/hooks/app/use-settings-theme", () => ({
@@ -137,19 +134,14 @@ vi.mock("@/lib/settings", async () => {
     saveStatsShortcut: state.saveStatsShortcutMock,
     loadStartOnLogin: state.loadStartOnLoginMock,
     saveStartOnLogin: state.saveStartOnLoginMock,
-    loadWidgetLayout: state.loadWidgetLayoutMock,
-    saveWidgetLayout: state.saveWidgetLayoutMock,
     loadWidgetVisible: state.loadWidgetVisibleMock,
     loadWidgetProviderIds: state.loadWidgetProviderIdsMock,
     saveWidgetProviderIds: state.saveWidgetProviderIdsMock,
-    loadWidgetMetric: state.loadWidgetMetricMock,
-    saveWidgetMetric: state.saveWidgetMetricMock,
-    loadWidgetZoom: state.loadWidgetZoomMock,
-    saveWidgetZoom: state.saveWidgetZoomMock,
+    loadWidgetProviderMetrics: state.loadWidgetProviderMetricsMock,
+    saveWidgetProviderMetrics: state.saveWidgetProviderMetricsMock,
   }
 })
 
-import { WIDGET_METRIC_SUGESTAO } from "@/lib/settings"
 import { SettingsWindowApp } from "@/settings-window/SettingsWindowApp"
 
 const openTab = (name: "General" | "Plugins" | "Widget" | "Shortcuts") =>
@@ -160,6 +152,7 @@ describe("SettingsWindowApp", () => {
     state.keyChangeHandlers = {}
     state.eventHandlers = {}
     state.invokeMock.mockReset()
+    state.emitMock.mockReset()
     state.isTauriMock.mockReset()
     state.isTauriMock.mockReturnValue(true)
     state.minimizeMock.mockReset()
@@ -182,15 +175,11 @@ describe("SettingsWindowApp", () => {
     state.saveStatsShortcutMock.mockReset()
     state.loadStartOnLoginMock.mockReset()
     state.saveStartOnLoginMock.mockReset()
-    state.loadWidgetLayoutMock.mockReset()
-    state.saveWidgetLayoutMock.mockReset()
     state.loadWidgetVisibleMock.mockReset()
     state.loadWidgetProviderIdsMock.mockReset()
     state.saveWidgetProviderIdsMock.mockReset()
-    state.loadWidgetMetricMock.mockReset()
-    state.saveWidgetMetricMock.mockReset()
-    state.loadWidgetZoomMock.mockReset()
-    state.saveWidgetZoomMock.mockReset()
+    state.loadWidgetProviderMetricsMock.mockReset()
+    state.saveWidgetProviderMetricsMock.mockReset()
 
     state.autostartEnableMock.mockResolvedValue(undefined)
     state.autostartDisableMock.mockResolvedValue(undefined)
@@ -202,10 +191,8 @@ describe("SettingsWindowApp", () => {
     state.saveGlobalShortcutMock.mockResolvedValue(undefined)
     state.saveStatsShortcutMock.mockResolvedValue(undefined)
     state.saveStartOnLoginMock.mockResolvedValue(undefined)
-    state.saveWidgetLayoutMock.mockResolvedValue(undefined)
     state.saveWidgetProviderIdsMock.mockResolvedValue(undefined)
-    state.saveWidgetMetricMock.mockResolvedValue(undefined)
-    state.saveWidgetZoomMock.mockResolvedValue(undefined)
+    state.saveWidgetProviderMetricsMock.mockResolvedValue(undefined)
 
     state.loadPluginSettingsMock.mockResolvedValue({ order: ["a", "b"], disabled: [] })
     state.loadAutoUpdateIntervalMock.mockResolvedValue(15)
@@ -214,11 +201,9 @@ describe("SettingsWindowApp", () => {
     state.loadGlobalShortcutMock.mockResolvedValue(null)
     state.loadStatsShortcutMock.mockResolvedValue(null)
     state.loadStartOnLoginMock.mockResolvedValue(false)
-    state.loadWidgetLayoutMock.mockResolvedValue("vertical")
     state.loadWidgetVisibleMock.mockResolvedValue(false)
     state.loadWidgetProviderIdsMock.mockResolvedValue(null)
-    state.loadWidgetMetricMock.mockResolvedValue(null)
-    state.loadWidgetZoomMock.mockResolvedValue(1)
+    state.loadWidgetProviderMetricsMock.mockResolvedValue({})
 
     state.invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_plugins") {
@@ -236,6 +221,7 @@ describe("SettingsWindowApp", () => {
       }
       return null
     })
+    state.emitMock.mockResolvedValue(undefined)
   })
 
   it("renders the title bar and key section headings", async () => {
@@ -244,7 +230,7 @@ describe("SettingsWindowApp", () => {
     expect(await screen.findByText("Reset Timers")).toBeInTheDocument()
     expect(screen.queryByText("Usage Mode")).not.toBeInTheDocument()
     await openTab("Widget")
-    expect(await screen.findByText("Floating Widget")).toBeInTheDocument()
+    expect(await screen.findByText("Taskbar Widget")).toBeInTheDocument()
   })
 
   it("saves the theme mode when selecting Dark", async () => {
@@ -253,31 +239,74 @@ describe("SettingsWindowApp", () => {
     expect(state.saveThemeModeMock).toHaveBeenCalledWith("dark")
   })
 
-  it("persists and re-probes when toggling a plugin", async () => {
+  it("persists and broadcasts when toggling a plugin", async () => {
     render(<SettingsWindowApp />)
     // Wait for bootstrap to finish so the Plugins list is populated.
     await screen.findByRole("tab", { name: "Plugins" })
     await openTab("Plugins")
     await screen.findByText("Alpha")
-    state.invokeMock.mockClear()
+    state.emitMock.mockClear()
     state.savePluginSettingsMock.mockClear()
     const checkboxes = await screen.findAllByRole("checkbox")
     await userEvent.click(checkboxes[checkboxes.length - 1])
     await waitFor(() => expect(state.savePluginSettingsMock).toHaveBeenCalled())
-    await waitFor(() =>
-      expect(state.invokeMock).toHaveBeenCalledWith("start_probe_batch", expect.anything())
+    await waitFor(() => expect(state.emitMock).toHaveBeenCalledWith(
+      "settings:plugins-changed",
+      expect.objectContaining({ order: ["a", "b"] })
+    ))
+    expect(state.invokeMock).not.toHaveBeenCalledWith("start_probe_batch", expect.anything())
+  })
+
+  it("opens the Accounts tab when the main window asks for it", async () => {
+    render(<SettingsWindowApp />)
+    await screen.findByRole("tab", { name: "Accounts" })
+    act(() => {
+      state.eventHandlers["settings:open-tab"]?.({ payload: { tab: "accounts" } })
+    })
+    expect(await screen.findByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("reloads the plugin list when an account is added", async () => {
+    render(<SettingsWindowApp />)
+    await openTab("Plugins")
+    await screen.findByText("Alpha")
+    await waitFor(() => expect(state.eventHandlers["accounts:changed"]).toBeDefined())
+
+    state.invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_plugins") {
+        return [
+          { id: "a", name: "Alpha", iconUrl: "i", lines: [], primaryCandidates: [] },
+          { id: "b", name: "Beta", iconUrl: "i", lines: [], primaryCandidates: [] },
+          { id: "a@1a2b3c4d", name: "Alpha · work", iconUrl: "i", lines: [], primaryCandidates: [] },
+        ]
+      }
+      return null
+    })
+    act(() => {
+      state.eventHandlers["accounts:changed"]?.({ payload: undefined })
+    })
+
+    expect(await screen.findByText("Alpha · work")).toBeInTheDocument()
+  })
+
+  it("broadcasts auto refresh interval changes", async () => {
+    render(<SettingsWindowApp />)
+    await userEvent.click(await screen.findByRole("radio", { name: "30 min" }))
+
+    expect(state.saveAutoUpdateIntervalMock).toHaveBeenCalledWith(30)
+    expect(state.emitMock).toHaveBeenCalledWith(
+      "settings:auto-update-interval-changed",
+      30
     )
   })
 
-  it("saves the widget metric and switches it to auto", async () => {
+  it("saves the widget metrics of a provider when a metric is unchecked", async () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    await userEvent.click(await screen.findByRole("radio", { name: "Weekly" }))
-    expect(state.saveWidgetMetricMock).toHaveBeenCalledWith("Weekly")
-
-    await userEvent.click(await screen.findByRole("radio", { name: "Auto" }))
-    expect(state.saveWidgetMetricMock).toHaveBeenCalledWith(WIDGET_METRIC_SUGESTAO)
+    // Alpha's default selection is its only progress metric, Weekly.
+    await userEvent.click(await screen.findByLabelText("Weekly"))
+    expect(state.saveWidgetProviderMetricsMock).toHaveBeenCalledWith({ a: [] })
   })
 
   it("renders the stats shortcut section", async () => {
@@ -288,32 +317,14 @@ describe("SettingsWindowApp", () => {
     expect(await screen.findByText("Show or hide the stats popup")).toBeInTheDocument()
   })
 
-  it("invokes set_widget_visible when toggling the floating widget", async () => {
+  it("invokes set_widget_visible when toggling the taskbar widget", async () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    await screen.findByText("Floating Widget")
-    await userEvent.click(await screen.findByText("Show floating widget"))
+    await screen.findByText("Taskbar Widget")
+    await userEvent.click(await screen.findByText("Show in taskbar"))
     await waitFor(() =>
       expect(state.invokeMock).toHaveBeenCalledWith("set_widget_visible", { visible: true })
-    )
-  })
-
-  it("updates the layout radio when the widget changes it via double-click", async () => {
-    render(<SettingsWindowApp />)
-    await screen.findByRole("tab", { name: "Widget" })
-    await openTab("Widget")
-    expect(await screen.findByRole("radio", { name: "Vertical" })).toHaveAttribute(
-      "aria-checked",
-      "true"
-    )
-    await waitFor(() => expect(state.keyChangeHandlers["widgetLayout"]).toBeDefined())
-    act(() => state.keyChangeHandlers["widgetLayout"]("horizontal"))
-    await waitFor(() =>
-      expect(screen.getByRole("radio", { name: "Horizontal" })).toHaveAttribute(
-        "aria-checked",
-        "true"
-      )
     )
   })
 
@@ -321,7 +332,7 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    const label = (await screen.findByText("Show floating widget")).closest("label")!
+    const label = (await screen.findByText("Show in taskbar")).closest("label")!
     expect(within(label).getByRole("checkbox")).toHaveAttribute("aria-checked", "false")
     await waitFor(() => expect(state.eventHandlers["widget:visibility"]).toBeDefined())
     act(() => state.eventHandlers["widget:visibility"]({ payload: true }))

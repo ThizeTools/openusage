@@ -1,8 +1,13 @@
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size};
 
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(not(target_os = "macos"))]
+use std::time::Duration;
+
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{
-    CollectionBehavior, ManagerExt, PanelLevel, StyleMask, WebviewWindowExt, tauri_panel,
+    tauri_panel, CollectionBehavior, ManagerExt, PanelLevel, StyleMask, WebviewWindowExt,
 };
 
 fn monitor_contains_physical_point(
@@ -196,7 +201,73 @@ pub fn reposition_panel(app_handle: &AppHandle) {
     position_panel_from_tray(app_handle);
 }
 
+/// Screen rect (physical px) of the taskbar widget that opened the panel.
+/// `None` means the panel anchors to the tray icon.
+#[cfg(not(target_os = "macos"))]
+static PANEL_ANCHOR: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
+
+#[cfg(not(target_os = "macos"))]
+fn set_panel_anchor(anchor: Option<(f64, f64, f64, f64)>) {
+    *PANEL_ANCHOR.lock().unwrap_or_else(|p| p.into_inner()) = anchor;
+}
+
+#[cfg(not(target_os = "macos"))]
+fn panel_anchor() -> Option<(f64, f64, f64, f64)> {
+    *PANEL_ANCHOR.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Opens/closes the panel above the taskbar widget.
+#[cfg(not(target_os = "macos"))]
+pub fn toggle_panel_at_anchor(app_handle: &AppHandle, x: i32, y: i32, w: i32, h: i32) {
+    set_panel_anchor(Some((x as f64, y as f64, w as f64, h as f64)));
+    cancel_blur_hide();
+    toggle_panel(app_handle);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn show_panel_at_anchor(app_handle: &AppHandle, x: i32, y: i32, w: i32, h: i32) {
+    set_panel_anchor(Some((x as f64, y as f64, w as f64, h as f64)));
+    cancel_blur_hide();
+    show_panel(app_handle);
+}
+
+/// Centers the panel over the anchor rect, just above (or below) the taskbar.
+#[cfg(not(target_os = "macos"))]
+fn position_panel_at_anchor(app_handle: &AppHandle, (ax, ay, aw, ah): (f64, f64, f64, f64)) {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        log::error!("Main window not found");
+        return;
+    };
+    let monitor = app_handle
+        .monitor_from_point(ax + aw / 2.0, ay + ah / 2.0)
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        log::warn!("No monitor available for anchored panel positioning");
+        return;
+    };
+    let panel = panel_layout_for_window(&window);
+    let work_area = work_area_layout(&monitor);
+    let gap = 12.0;
+    let at_bottom = ay + ah / 2.0 > work_area.y + work_area.height / 2.0;
+    let _ = app_handle.emit("panel:anchor", if at_bottom { "bottom" } else { "top" });
+    let max_x = (work_area.x + work_area.width - panel.width).max(work_area.x);
+    let panel_x = (ax + aw / 2.0 - panel.width / 2.0).clamp(work_area.x, max_x);
+    let panel_y = if at_bottom {
+        (work_area.y + work_area.height - panel.height - gap).max(work_area.y)
+    } else {
+        work_area.y + gap
+    };
+    set_panel_top_left_immediately(&window, app_handle, panel_x, panel_y, 0.0);
+}
+
 fn position_panel_from_tray(app_handle: &AppHandle) {
+    #[cfg(not(target_os = "macos"))]
+    if let Some(anchor) = panel_anchor() {
+        position_panel_at_anchor(app_handle, anchor);
+        return;
+    }
     let Some(tray) = app_handle.tray_by_id("tray") else {
         log::debug!("position_panel_from_tray: tray icon not found");
         #[cfg(not(target_os = "macos"))]
@@ -265,6 +336,82 @@ fn apply_panel_rounded_corners(window: &tauri::WebviewWindow) {
 fn apply_panel_rounded_corners(_window: &tauri::WebviewWindow) {}
 
 #[cfg(not(target_os = "macos"))]
+static PANEL_OPEN: AtomicBool = AtomicBool::new(false);
+#[cfg(not(target_os = "macos"))]
+static BLUR_HIDE_GEN: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(not(target_os = "macos"), not(debug_assertions)))]
+static RELOAD_MAIN_ON_FIRST_SHOW: AtomicBool = AtomicBool::new(true);
+#[cfg(not(target_os = "macos"))]
+const BLUR_HIDE_DELAY_MS: u64 = 200;
+
+/// Cancel a pending click-outside hide (e.g. tray click races with blur on Windows).
+#[cfg(not(target_os = "macos"))]
+pub fn cancel_blur_hide() {
+    BLUR_HIDE_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Hide the panel shortly after blur so tray clicks can toggle first.
+#[cfg(not(target_os = "macos"))]
+pub fn schedule_blur_hide(app_handle: &AppHandle) {
+    let generation = BLUR_HIDE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let handle = app_handle.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(BLUR_HIDE_DELAY_MS));
+        if BLUR_HIDE_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if PANEL_OPEN.load(Ordering::SeqCst) {
+            hide_panel(&handle);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+pub fn toggle_panel_from_tray(app_handle: &AppHandle) {
+    toggle_panel(app_handle);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn toggle_panel_from_tray(app_handle: &AppHandle) {
+    set_panel_anchor(None);
+    cancel_blur_hide();
+    toggle_panel(app_handle);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reload_main_webview_on_first_release_show(window: &tauri::WebviewWindow) {
+    #[cfg(debug_assertions)]
+    {
+        let _ = window;
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        if !RELOAD_MAIN_ON_FIRST_SHOW.swap(false, Ordering::SeqCst) {
+            return;
+        }
+
+        let window = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let reload_window = window.clone();
+            if let Err(error) = window.run_on_main_thread(move || {
+                if let Err(error) = reload_window.reload() {
+                    log::warn!(
+                        "Failed to reload main WebView after first visible show: {}",
+                        error
+                    );
+                } else {
+                    log::info!("Reloaded main WebView after first visible show");
+                }
+            }) {
+                log::warn!("Failed to schedule main WebView reload: {}", error);
+            }
+        });
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn show_panel(app_handle: &AppHandle) {
     let Some(window) = app_handle.get_webview_window("main") else {
         log::error!("Main window not found");
@@ -276,12 +423,14 @@ pub fn show_panel(app_handle: &AppHandle) {
         log::error!("Failed to show panel: {}", error);
         return;
     }
+    PANEL_OPEN.store(true, Ordering::SeqCst);
     if let Err(error) = window.unminimize() {
         log::debug!("Failed to unminimize panel: {}", error);
     }
     if let Err(error) = window.set_focus() {
         log::debug!("Failed to focus panel: {}", error);
     }
+    reload_main_webview_on_first_release_show(&window);
     // Anchor the popup at the tray icon (frontend skips repositioning on Windows).
     position_panel_from_tray(app_handle);
     // Always reopen on the Stats view (also dismisses a leftover About overlay).
@@ -300,6 +449,7 @@ pub fn hide_panel(app_handle: &AppHandle) {
     let Some(window) = app_handle.get_webview_window("main") else {
         return;
     };
+    PANEL_OPEN.store(false, Ordering::SeqCst);
     if let Err(error) = window.hide() {
         log::warn!("Failed to hide panel: {}", error);
     }
@@ -322,15 +472,17 @@ pub fn toggle_panel(app_handle: &AppHandle) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn toggle_panel(app_handle: &AppHandle) {
-    let Some(window) = app_handle.get_webview_window("main") else {
+    if app_handle.get_webview_window("main").is_none() {
         log::error!("Main window not found");
         return;
-    };
+    }
 
-    match window.is_visible() {
-        Ok(true) => hide_panel(app_handle),
-        Ok(false) => show_panel(app_handle),
-        Err(error) => log::warn!("Failed to read panel visibility: {}", error),
+    if PANEL_OPEN.load(Ordering::SeqCst) {
+        log::debug!("toggle_panel: hiding panel");
+        hide_panel(app_handle);
+    } else {
+        log::debug!("toggle_panel: showing panel");
+        show_panel(app_handle);
     }
 }
 

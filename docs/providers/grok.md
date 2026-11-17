@@ -1,93 +1,43 @@
 # Grok
 
-Tracks Grok Build credit usage from the local Grok CLI login.
+Tracks Grok weekly credit usage and the pay-as-you-go cap.
 
 > Reverse-engineered, undocumented API. May change without notice.
 
-## Overview
+## Sign-in
 
-- **Protocol:** REST (plain JSON)
-- **Base URL:** `https://cli-chat-proxy.grok.com/v1`
-- **Auth:** cached Grok CLI token from `~/.grok/auth.json`
-- **Refresh:** Grok CLI refresh token from the same file
-- **Usage unit:** raw billing units from Grok
-- **Plan source:** `GET /settings` (`subscription_tier_display`)
-- **Reset period:** billing period from the CLI billing response
+- Sign in from **Settings → Accounts** with an xAI device code.
+- Scopes: `openid email offline_access grok-cli:access`. OpenUsage does not ask for `api:access`, which would let the token run Grok models.
+- Refresh: the access token is renewed about 5 minutes before `expiresAt`, and once on 401/403. A rotated refresh token is saved. A refused refresh token asks you to sign in again.
+- Account name: the `email` in the `id_token`, when present.
 
-## Setup
+## API
 
-1. Install and sign in to the Grok CLI:
+**Base URL:** `https://cli-chat-proxy.grok.com/v1`
 
-```bash
-grok login
-```
+| Endpoint | Use |
+|----------|-----|
+| `GET /billing?format=credits` | Weekly period, used percent, pay-as-you-go cap |
+| `GET /settings` | `subscription_tier_display`, used as the plan |
 
-2. Enable the Grok plugin in OpenUsage settings.
+Headers on both: `Authorization: Bearer <access_token>`, `X-XAI-Token-Auth: xai-grok-cli`, `Accept: application/json`, `User-Agent: OpenUsage`.
 
-OpenUsage reads the same local auth file that the Grok CLI uses. Access tokens are refreshed automatically before expiry when a `refresh_token` is present. If refresh fails, run `grok login` again.
+Refresh: `POST https://auth.x.ai/oauth2/token` (form body, `grant_type=refresh_token`, `client_id`, `refresh_token`).
 
-## Endpoint
+## Displayed lines
 
-### GET /billing
+| Line | Scope | Description |
+|------|-------|-------------|
+| Weekly | overview (primary 1) | Weekly included credits used, percent. Shown for weekly periods only. |
+| Extra Usage | detail | Badge "Pay as you go" with the cap in the subtitle. Shown only when a cap is set. |
 
-Returns the current Grok Build billing period, credit usage, and pay-as-you-go cap.
-
-#### Headers
-
-| Header | Required | Value |
-|--------|----------|-------|
-| Authorization | yes | `Bearer <token from ~/.grok/auth.json>` |
-| X-XAI-Token-Auth | yes | `xai-grok-cli` |
-| Accept | yes | `application/json` |
-
-#### Response
-
-```json
-{
-  "config": {
-    "monthlyLimit": { "val": 60000 },
-    "used": { "val": 4277 },
-    "onDemandCap": { "val": 0 },
-    "billingPeriodStart": "2026-05-01T00:00:00+00:00",
-    "billingPeriodEnd": "2026-06-01T00:00:00+00:00",
-    "history": [
-      {
-        "billingCycle": { "year": 2026, "month": 4 },
-        "includedUsed": { "val": 0 },
-        "onDemandUsed": { "val": 0 },
-        "totalUsed": { "val": 0 }
-      }
-    ]
-  }
-}
-```
-
-### GET /settings
-
-Returns remote CLI settings. OpenUsage reads `subscription_tier_display` from this response and shows it as the provider plan label, for example `SuperGrok Heavy`.
-
-Used fields:
-
-- `used.val` — current billing period usage
-- `monthlyLimit.val` — included credit limit
-- `onDemandCap.val` — pay-as-you-go cap; `0` means disabled
-- `billingPeriodEnd` — current billing period reset time
-
-## Displayed Lines
-
-| Line | Description |
-|------|-------------|
-| Credits used | Percent of included monthly credits used |
-| Pay as you go | Disabled, or the configured pay-as-you-go cap |
+Team accounts without a personal quota show a "Notice" text line instead.
 
 ## Errors
 
 | Condition | Message |
 |-----------|---------|
-| Missing auth file | "Grok not logged in. Run `grok login`." |
-| Expired token with no refresh token | "Grok auth expired. Run `grok login` again." |
-| Refresh token rejected | "Grok auth expired. Run `grok login` again." |
-| 401/403 after retry | "Grok auth expired. Run `grok login` again." |
-| HTTP error | "Grok billing request failed (HTTP {status}). Try again later." |
-| Network error | "Grok billing request failed. Check your connection." |
-| Invalid response | "Grok billing response changed." |
+| No credentials | "Sign in again in Settings → Accounts." |
+| Refresh token refused, or 401/403 after retry | "Sign in again in Settings → Accounts." |
+| Other HTTP error | "Grok usage request failed (HTTP {status}). Try again later." |
+| Unreadable response | "Grok usage data is unreadable. Try again later." |

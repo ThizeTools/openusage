@@ -1,20 +1,21 @@
-import { useCallback, useEffect } from "react"
-import { invoke, isTauri } from "@tauri-apps/api/core"
+import { useCallback, useLayoutEffect, useState } from "react"
+import { isTauri } from "@tauri-apps/api/core"
 import {
   disable as disableAutostart,
   enable as enableAutostart,
-  isEnabled as isAutostartEnabled,
+  isEnabled as isAutostartEnabled
 } from "@tauri-apps/plugin-autostart"
 import type { PluginMeta } from "@/lib/plugin-types"
+import { loadAvailablePlugins } from "@/lib/provider-discovery"
 import {
   arePluginSettingsEqual,
   DEFAULT_AUTO_UPDATE_INTERVAL,
   DEFAULT_GLOBAL_SHORTCUT,
   DEFAULT_MENUBAR_ICON_STYLE,
+  DEFAULT_PLUGIN_SETTINGS,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_THEME_MODE,
-  DEFAULT_WIDGET_LAYOUT,
   DEFAULT_WIDGET_PROVIDER_IDS,
   DEFAULT_WIDGET_VISIBLE,
   getEnabledPluginIds,
@@ -27,7 +28,6 @@ import {
   loadResetTimerDisplayMode,
   loadStartOnLogin,
   loadThemeMode,
-  loadWidgetLayout,
   loadWidgetProviderIds,
   loadWidgetVisible,
   normalizePluginSettings,
@@ -38,8 +38,7 @@ import {
   type PluginSettings,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type WidgetLayout,
-  type WidgetProviderIds,
+  type WidgetProviderIds
 } from "@/lib/settings"
 
 type UseSettingsBootstrapArgs = {
@@ -51,7 +50,6 @@ type UseSettingsBootstrapArgs = {
   setGlobalShortcut: (value: GlobalShortcut) => void
   setStartOnLogin: (value: boolean) => void
   setMenubarIconStyle: (value: MenubarIconStyle) => void
-  setWidgetLayout: (value: WidgetLayout) => void
   setWidgetVisible: (value: boolean) => void
   setWidgetProviderIds: (value: WidgetProviderIds) => void
   setLoadingForPlugins: (ids: string[]) => void
@@ -68,13 +66,15 @@ export function useSettingsBootstrap({
   setGlobalShortcut,
   setStartOnLogin,
   setMenubarIconStyle,
-  setWidgetLayout,
   setWidgetVisible,
   setWidgetProviderIds,
   setLoadingForPlugins,
   setErrorForPlugins,
-  startBatch,
+  startBatch
 }: UseSettingsBootstrapArgs) {
+  const [pluginLoadError, setPluginLoadError] = useState<string | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
+
   const applyStartOnLogin = useCallback(async (value: boolean) => {
     if (!isTauri()) return
     const currentlyEnabled = await isAutostartEnabled()
@@ -88,18 +88,48 @@ export function useSettingsBootstrap({
     await disableAutostart()
   }, [])
 
-  useEffect(() => {
+  const retryPluginLoad = useCallback(() => {
+    setPluginLoadError(null)
+    setPluginSettings(null)
+    setPluginsMeta([])
+    setReloadToken((value) => value + 1)
+  }, [setPluginSettings, setPluginsMeta])
+
+  useLayoutEffect(() => {
     let isMounted = true
 
     const loadSettings = async () => {
       try {
-        const availablePlugins = await invoke<PluginMeta[]>("list_plugins")
+        const availablePlugins = await loadAvailablePlugins(() => isMounted)
         if (!isMounted) return
+        setPluginLoadError(null)
         setPluginsMeta(availablePlugins)
+
+        const defaultNormalized = normalizePluginSettings(DEFAULT_PLUGIN_SETTINGS, availablePlugins)
+        setPluginSettings(defaultNormalized)
+        const defaultEnabledIds = getEnabledPluginIds(defaultNormalized)
+        setLoadingForPlugins(defaultEnabledIds)
+        void startBatch(defaultEnabledIds).catch((error) => {
+          console.error("Failed to start probe batch:", error)
+          if (isMounted) {
+            setErrorForPlugins(defaultEnabledIds, "Failed to start probe")
+          }
+        })
 
         const storedSettings = await loadPluginSettings()
         const migratedSettings = migrateWindsurfToDevin(storedSettings)
         const normalized = normalizePluginSettings(migratedSettings, availablePlugins)
+        if (isMounted && !arePluginSettingsEqual(defaultNormalized, normalized)) {
+          setPluginSettings(normalized)
+          const enabledIds = getEnabledPluginIds(normalized)
+          setLoadingForPlugins(enabledIds)
+          void startBatch(enabledIds).catch((error) => {
+            console.error("Failed to start probe batch:", error)
+            if (isMounted) {
+              setErrorForPlugins(enabledIds, "Failed to start probe")
+            }
+          })
+        }
         if (!arePluginSettingsEqual(storedSettings, normalized)) {
           await savePluginSettings(normalized)
         }
@@ -157,13 +187,6 @@ export function useSettingsBootstrap({
           console.error("Failed to load menubar icon style:", error)
         }
 
-        let storedWidgetLayout = DEFAULT_WIDGET_LAYOUT
-        try {
-          storedWidgetLayout = await loadWidgetLayout()
-        } catch (error) {
-          console.error("Failed to load widget layout:", error)
-        }
-
         let storedWidgetVisible = DEFAULT_WIDGET_VISIBLE
         try {
           storedWidgetVisible = await loadWidgetVisible()
@@ -179,30 +202,19 @@ export function useSettingsBootstrap({
         }
 
         if (isMounted) {
-          setPluginSettings(normalized)
           setAutoUpdateInterval(storedInterval)
           setThemeMode(storedThemeMode)
           setResetTimerDisplayMode(storedResetTimerDisplayMode)
           setGlobalShortcut(storedGlobalShortcut)
           setStartOnLogin(storedStartOnLogin)
           setMenubarIconStyle(storedMenubarIconStyle)
-          setWidgetLayout(storedWidgetLayout)
           setWidgetVisible(storedWidgetVisible)
           setWidgetProviderIds(storedWidgetProviderIds)
-
-          const enabledIds = getEnabledPluginIds(normalized)
-          setLoadingForPlugins(enabledIds)
-          try {
-            await startBatch(enabledIds)
-          } catch (error) {
-            console.error("Failed to start probe batch:", error)
-            if (isMounted) {
-              setErrorForPlugins(enabledIds, "Failed to start probe")
-            }
-          }
         }
       } catch (e) {
-        console.error("Failed to load plugin settings:", e)
+        if (!isMounted) return
+        console.error("Failed to load providers:", e)
+        setPluginLoadError("Failed to load providers")
       }
     }
 
@@ -225,13 +237,15 @@ export function useSettingsBootstrap({
     setResetTimerDisplayMode,
     setStartOnLogin,
     setThemeMode,
-    setWidgetLayout,
     setWidgetVisible,
     setWidgetProviderIds,
     startBatch,
+    reloadToken
   ])
 
   return {
     applyStartOnLogin,
+    pluginLoadError,
+    retryPluginLoad
   }
 }

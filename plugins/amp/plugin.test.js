@@ -1,379 +1,167 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { makeCtx } from "../test-helpers.js"
-
-const SECRETS_FILE = "~/.local/share/amp/secrets.json"
-const SECRETS_KEY = "apiKey@https://ampcode.com/"
-const API_URL = "https://ampcode.com/api/internal"
+import { makeAccount, makeCtx } from "../test-helpers.js"
 
 const loadPlugin = async () => {
+  delete globalThis.__openusage_plugin
+  vi.resetModules()
   await import("./plugin.js")
   return globalThis.__openusage_plugin
 }
 
-function writeSecrets(ctx, apiKey) {
-  var obj = {}
-  obj[SECRETS_KEY] = apiKey || "test-api-key"
-  ctx.host.fs.writeText(SECRETS_FILE, JSON.stringify(obj))
-}
+const BALANCE_URL = "https://ampcode.com/api/internal?userDisplayBalanceInfo"
+const AUTHENTICATE_URL = "https://authapi.ampcode.com/user_management/authenticate"
 
-function balanceResponse(displayText) {
-  return {
-    status: 200,
-    bodyText: JSON.stringify({ ok: true, result: { displayText: displayText } }),
-  }
-}
+const jwt = (payload) =>
+  "eyJhbGciOiJSUzI1NiJ9." +
+  Buffer.from(JSON.stringify(payload)).toString("base64url") +
+  ".signature"
 
-function standardDisplayText(opts) {
-  opts = opts || {}
-  var remaining = opts.remaining !== undefined ? opts.remaining : 1.66
-  var total = opts.total !== undefined ? opts.total : 20
-  var rate = opts.rate !== undefined ? opts.rate : 0.83
-  var text = "Signed in as user@test.com (testuser)\n"
-  text += "Amp Free: $" + remaining + "/$" + total + " remaining (replenishes +$" + rate + "/hour)"
-  if (opts.bonus !== false) {
-    var pct = opts.bonusPct || 100
-    var days = opts.bonusDays || 2
-    text += " [+" + pct + "% bonus for " + days + " more days]"
-  }
-  text += " - https://ampcode.com/settings#amp-free\n"
-  var credits = opts.credits !== undefined ? opts.credits : 0
-  text += "Individual credits: $" + credits + " remaining - https://ampcode.com/settings"
-  return text
+const displayText = [
+  "**Signed in as amp@example.com (example)**",
+  "Amp Megawatt Tier: agent usage $19.98 of $20.00 remaining (100%), orb usage 737.6h of 750h a1.small orb hours remaining (98%) - period 2026-11-09 to 2026-12-09, ends in 29 days",
+  "Amp Free: 61% remaining today (resets daily)",
+  "Individual credits: $57.45 remaining (set up auto-reload to avoid running out) - https://ampcode.com/settings",
+].join("\n")
+
+const json = (status, body) => ({ status, headers: {}, bodyText: JSON.stringify(body) })
+const balance = (text = displayText) => json(200, { result: { displayText: text } })
+
+function mockAmp(ctx, { usage, authenticate }) {
+  ctx.host.http.request.mockImplementation((opts) => {
+    if (opts.url === BALANCE_URL) return typeof usage === "function" ? usage(opts) : usage
+    if (opts.url === AUTHENTICATE_URL) return authenticate
+    throw new Error("unexpected url " + opts.url)
+  })
 }
 
 describe("amp plugin", () => {
   beforeEach(() => {
     delete globalThis.__openusage_plugin
-    vi.resetModules()
   })
 
-  // --- Auth ---
+  it("throws sign-in message when credentials are missing", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({})
 
-  it("throws when secrets file not found", async () => {
-    var ctx = makeCtx()
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Amp not installed")
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
+    expect(ctx.host.http.request).not.toHaveBeenCalled()
   })
 
-  it("throws when secrets file has no api key", async () => {
-    var ctx = makeCtx()
-    ctx.host.fs.writeText(SECRETS_FILE, JSON.stringify({ other: "value" }))
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Amp not installed")
-  })
+  it("returns agent usage, orb hours, free tier and credits from the usage text", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "at-1", expiresAt: Date.now() + 60 * 60 * 1000 })
+    mockAmp(ctx, { usage: balance() })
 
-  it("throws on invalid JSON in secrets file", async () => {
-    var ctx = makeCtx()
-    ctx.host.fs.writeText(SECRETS_FILE, "{bad json")
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Amp not installed")
-  })
+    const result = plugin.probe(ctx)
 
-  // --- API request ---
+    expect(result.plan).toBe("Megawatt")
+    expect(result.lines).toEqual([
+      {
+        type: "progress",
+        label: "Agent Usage",
+        used: 0.02,
+        limit: 20,
+        format: { kind: "dollars" },
+        resetsAt: "2026-12-09T00:00:00.000Z",
+        periodDurationMs: 30 * 24 * 60 * 60 * 1000,
+      },
+      {
+        type: "progress",
+        label: "Orb Hours",
+        used: 12.4,
+        limit: 750,
+        format: { kind: "count", suffix: "hours" },
+        resetsAt: "2026-12-09T00:00:00.000Z",
+        periodDurationMs: 30 * 24 * 60 * 60 * 1000,
+      },
+      {
+        type: "progress",
+        label: "Amp Free",
+        used: 39,
+        limit: 100,
+        format: { kind: "percent" },
+        periodDurationMs: 24 * 60 * 60 * 1000,
+      },
+      { type: "text", label: "Credits", value: "$57.45 left" },
+    ])
 
-  it("sends POST with Bearer auth to api/internal", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx, "my-api-key")
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText()))
-    var plugin = await loadPlugin()
-    plugin.probe(ctx)
-    var call = ctx.host.http.request.mock.calls[0][0]
+    const call = ctx.host.http.request.mock.calls[0][0]
     expect(call.method).toBe("POST")
-    expect(call.url).toBe(API_URL)
-    expect(call.headers.Authorization).toBe("Bearer my-api-key")
-    expect(call.headers["Content-Type"]).toBe("application/json")
-    var body = JSON.parse(call.bodyText)
-    expect(body.method).toBe("userDisplayBalanceInfo")
-    expect(body.params).toEqual({})
+    expect(call.headers.Authorization).toBe("Bearer at-1")
+    expect(JSON.parse(call.bodyText)).toEqual({ method: "userDisplayBalanceInfo", params: {} })
+    expect(ctx.account.setLabel).toHaveBeenCalledWith("amp@example.com")
   })
 
-  // --- HTTP errors ---
-
-  it("throws on HTTP 401", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 401, bodyText: "" })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Session expired")
-  })
-
-  it("throws on HTTP 403", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 403, bodyText: "" })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Session expired")
-  })
-
-  it("throws with error detail on non-2xx with JSON error", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({
-      status: 402,
-      bodyText: JSON.stringify({ error: { message: "Credits required for this feature." } }),
+  it("renews an expiring token, saves the rotated refresh token and takes expiry from the access token", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    const newExp = Math.floor(Date.now() / 1000) + 300
+    ctx.account = makeAccount({
+      access_token: "at-old",
+      refresh_token: "rt-old",
+      expiresAt: Date.now() + 60 * 1000,
+      user: { email: "old@example.com" },
     })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Credits required for this feature.")
-  })
-
-  it("throws generic error on HTTP 500", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 500, bodyText: "" })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Request failed (HTTP 500)")
-  })
-
-  it("throws on network error", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockImplementation(() => { throw new Error("ECONNREFUSED") })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Request failed. Check your connection.")
-  })
-
-  // --- Response structure errors ---
-
-  it("throws when response has no ok field", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 200, bodyText: JSON.stringify({ result: {} }) })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Could not parse usage data")
-  })
-
-  it("throws when response has no displayText", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue({
-      status: 200,
-      bodyText: JSON.stringify({ ok: true, result: {} }),
+    mockAmp(ctx, {
+      authenticate: json(200, {
+        access_token: jwt({ exp: newExp }),
+        refresh_token: "rt-new",
+        user: { email: "dev@example.com" },
+      }),
+      usage: (opts) =>
+        opts.headers.Authorization.startsWith("Bearer eyJ") ? balance() : json(401, {}),
     })
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Could not parse usage data")
+
+    plugin.probe(ctx)
+
+    const authCall = ctx.host.http.request.mock.calls.find((c) => c[0].url === AUTHENTICATE_URL)[0]
+    expect(JSON.parse(authCall.bodyText)).toEqual({
+      client_id: "client_01JNSEYM3V0J5AXK4YXNXRXTGP",
+      grant_type: "refresh_token",
+      refresh_token: "rt-old",
+    })
+    expect(ctx.account.saved.refresh_token).toBe("rt-new")
+    expect(ctx.account.saved.expiresAt).toBe(newExp * 1000)
+    expect(ctx.account.saved.user).toEqual({ email: "dev@example.com" })
   })
 
-  it("throws when free tier present but unparseable", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse("Amp Free: unparseable data"))
-    var plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Could not parse usage data")
+  it("renews once on 401 and retries the usage read", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "at-old", refresh_token: "rt-old" })
+    mockAmp(ctx, {
+      authenticate: json(200, { access_token: "at-new", refresh_token: "rt-new" }),
+      usage: (opts) => (opts.headers.Authorization === "Bearer at-new" ? balance() : json(401, {})),
+    })
+
+    const result = plugin.probe(ctx)
+
+    expect(result.lines.find((l) => l.label === "Credits").value).toBe("$57.45 left")
+    expect(ctx.account.saved.access_token).toBe("at-new")
+    expect(ctx.account.saved.expiresAt).toBeUndefined()
   })
 
-  // --- Balance parsing ---
+  it("asks to sign in again when the renewal refuses the refresh token", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "at-old", refresh_token: "rt-old" })
+    mockAmp(ctx, {
+      authenticate: json(400, { error: "invalid_grant" }),
+      usage: json(401, {}),
+    })
 
-  it("parses standard balance text", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 1.66, total: 20, rate: 0.83,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    var line = result.lines[0]
-    expect(line.type).toBe("progress")
-    expect(line.label).toBe("Free")
-    expect(line.used).toBeCloseTo(18.34, 2)
-    expect(line.limit).toBe(20)
-    expect(line.format.kind).toBe("dollars")
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
+    expect(ctx.account.saveCredentials).not.toHaveBeenCalled()
   })
 
-  it("parses balance with no bonus bracket", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 10, total: 20, rate: 0.83, bonus: false,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.lines.length).toBe(1)
-    expect(result.lines[0].used).toBe(10)
-  })
+  it("asks to sign in again when the usage read is 401 without a refresh token", async () => {
+    const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "at-old" })
+    mockAmp(ctx, { usage: json(401, {}) })
 
-  it("includes bonus text line when present", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      bonusPct: 100, bonusDays: 2,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    var bonusLine = result.lines.find(function (l) { return l.label === "Bonus" })
-    expect(bonusLine).toBeTruthy()
-    expect(bonusLine.value).toBe("+100% for 2d")
-  })
-
-  it("includes credits text line when credits > 0", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      credits: 5.50,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    var creditsLine = result.lines.find(function (l) { return l.label === "Credits" })
-    expect(creditsLine).toBeTruthy()
-    expect(creditsLine.value).toBe("$5.50")
-  })
-
-  it("omits credits line when credits are zero", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      credits: 0,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    var creditsLine = result.lines.find(function (l) { return l.label === "Credits" })
-    expect(creditsLine).toBeUndefined()
-  })
-
-  it("clamps used to 0 when remaining exceeds total", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 25, total: 20,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.lines[0].used).toBe(0)
-  })
-
-  // --- Reset time and period ---
-
-  it("returns resetsAt and periodDurationMs", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 1.66, total: 20, rate: 0.83,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    var line = result.lines[0]
-    expect(line.resetsAt).toBeTruthy()
-    expect(line.periodDurationMs).toBe(24 * 3600 * 1000)
-  })
-
-  it("returns null resetsAt when nothing used", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 20, total: 20, rate: 0.83,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.lines[0].used).toBe(0)
-    expect(result.lines[0].resetsAt).toBeUndefined()
-  })
-
-  it("returns null resetsAt when hourly rate is zero", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      remaining: 10, total: 20, rate: 0,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.lines[0].used).toBe(10)
-    expect(result.lines[0].resetsAt).toBeUndefined()
-  })
-
-  // --- Plan ---
-
-  it("returns Free as plan", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText()))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Free")
-  })
-
-  // --- Credits only ---
-
-  it("handles credits-only user", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    var text = "Signed in as user@test.com (testuser)\nIndividual credits: $25.50 remaining - https://ampcode.com/settings"
-    ctx.host.http.request.mockReturnValue(balanceResponse(text))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Credits")
-    expect(result.lines.length).toBe(1)
-    expect(result.lines[0].label).toBe("Credits")
-    expect(result.lines[0].value).toBe("$25.50")
-  })
-
-  it("parses credits-only text with top-up hint", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    var text = "Signed in as person@example.com (exampleuser)\n"
-      + "Individual credits: $5 remaining (set up automatic top-up to avoid running out) - https://ampcode.com/settings"
-    ctx.host.http.request.mockReturnValue(balanceResponse(text))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Credits")
-    expect(result.lines.length).toBe(1)
-    expect(result.lines[0].label).toBe("Credits")
-    expect(result.lines[0].value).toBe("$5.00")
-  })
-
-  it("shows both free tier and credits when both present", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse(standardDisplayText({
-      credits: 10,
-    })))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Free")
-    var progressLine = result.lines.find(function (l) { return l.type === "progress" })
-    var creditsLine = result.lines.find(function (l) { return l.label === "Credits" })
-    expect(progressLine).toBeTruthy()
-    expect(creditsLine).toBeTruthy()
-    expect(creditsLine.value).toBe("$10.00")
-  })
-
-  it("falls back to credits-only when no balance or credits parsed", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    ctx.host.http.request.mockReturnValue(balanceResponse("Signed in as user@test.com (testuser)"))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Credits")
-    expect(result.lines.length).toBe(1)
-    expect(result.lines[0].label).toBe("Credits")
-    expect(result.lines[0].value).toBe("$0.00")
-  })
-
-  // --- Credits-only $0 ---
-
-  it("shows $0.00 for credits-only user with zero balance", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    var text = "Signed in as user@test.com (testuser)\nIndividual credits: $0 remaining - https://ampcode.com/settings"
-    ctx.host.http.request.mockReturnValue(balanceResponse(text))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.plan).toBe("Credits")
-    expect(result.lines.length).toBe(1)
-    expect(result.lines[0].label).toBe("Credits")
-    expect(result.lines[0].value).toBe("$0.00")
-  })
-
-  // --- Regex resilience ---
-
-  it("parses balance with comma-formatted amounts", async () => {
-    var ctx = makeCtx()
-    writeSecrets(ctx)
-    var text = "Signed in as user@test.com (testuser)\n"
-      + "Amp Free: $1,000.50/$2,000 remaining (replenishes +$0.83/hour) - https://ampcode.com/settings#amp-free\n"
-      + "Individual credits: $0 remaining - https://ampcode.com/settings"
-    ctx.host.http.request.mockReturnValue(balanceResponse(text))
-    var plugin = await loadPlugin()
-    var result = plugin.probe(ctx)
-    expect(result.lines[0].limit).toBe(2000)
-    expect(result.lines[0].used).toBeCloseTo(999.50, 2)
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
   })
 })

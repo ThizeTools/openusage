@@ -17,7 +17,7 @@ export type TrayPrimaryBar = {
   expectedFraction?: number
 }
 
-type ProgressLine = Extract<
+export type ProgressLine = Extract<
   PluginOutput["lines"][number],
   { type: "progress"; label: string; used: number; limit: number }
 >
@@ -26,7 +26,7 @@ function isProgressLine(line: PluginOutput["lines"][number]): line is ProgressLi
   return line.type === "progress"
 }
 
-function expectedFractionForLine(line: ProgressLine, nowMs: number): number | undefined {
+export function expectedFractionForLine(line: ProgressLine, nowMs: number): number | undefined {
   if (!line.resetsAt || typeof line.periodDurationMs !== "number") return undefined
   if (!Number.isFinite(line.periodDurationMs) || line.periodDurationMs <= 0) return undefined
   const resetsAtMs = Date.parse(line.resetsAt)

@@ -7,10 +7,9 @@ import {
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_THEME_MODE,
-  DEFAULT_WIDGET_LAYOUT,
   DEFAULT_WIDGET_PROVIDER_IDS,
+  DEFAULT_WIDGET_PROVIDER_METRICS,
   DEFAULT_WIDGET_VISIBLE,
-  DEFAULT_WIDGET_ZOOM,
   arePluginSettingsEqual,
   getEnabledPluginIds,
   loadAutoUpdateInterval,
@@ -19,9 +18,8 @@ import {
   loadPluginSettings,
   loadResetTimerDisplayMode,
   loadStartOnLogin,
-  loadWidgetLayout,
-  loadWidgetPosition,
   loadWidgetProviderIds,
+  loadWidgetProviderMetrics,
   loadWidgetVisible,
   migrateLegacyTraySettings,
   migrateWindsurfToDevin,
@@ -34,11 +32,8 @@ import {
   saveResetTimerDisplayMode,
   saveStartOnLogin,
   saveThemeMode,
-  saveWidgetLayout,
-  loadWidgetZoom,
-  saveWidgetZoom,
-  saveWidgetPosition,
   saveWidgetProviderIds,
+  saveWidgetProviderMetrics,
   saveWidgetVisible,
 } from "@/lib/settings"
 import type { PluginMeta } from "@/lib/plugin-types"
@@ -112,6 +107,28 @@ describe("settings", () => {
     const result = normalizePluginSettings({ order: [], disabled: [] }, plugins)
     expect(result.order).toEqual(["claude", "copilot", "devin"])
     expect(result.disabled).toEqual(["copilot", "devin"])
+  })
+
+  it("enables newly seen account instances even when the plugin is not default", () => {
+    const plugins: PluginMeta[] = [
+      { id: "copilot", name: "Copilot", iconUrl: "", lines: [], primaryCandidates: [] },
+      { id: "claude@1a2b3c4d", name: "Claude", iconUrl: "", lines: [], primaryCandidates: [] },
+      { id: "copilot@9f8e7d6c", name: "Copilot · work", iconUrl: "", lines: [], primaryCandidates: [] },
+    ]
+    const result = normalizePluginSettings({ order: [], disabled: [] }, plugins)
+    expect(result.order).toEqual(["copilot", "claude@1a2b3c4d", "copilot@9f8e7d6c"])
+    expect(result.disabled).toEqual(["copilot"])
+  })
+
+  it("keeps a user-disabled account instance disabled and drops removed accounts", () => {
+    const plugins: PluginMeta[] = [
+      { id: "claude@1a2b3c4d", name: "Claude", iconUrl: "", lines: [], primaryCandidates: [] },
+    ]
+    const result = normalizePluginSettings(
+      { order: ["claude@gone", "claude@1a2b3c4d"], disabled: ["claude@1a2b3c4d", "claude@gone"] },
+      plugins
+    )
+    expect(result).toEqual({ order: ["claude@1a2b3c4d"], disabled: ["claude@1a2b3c4d"] })
   })
 
   it("migrates enabled windsurf settings to enabled devin settings", () => {
@@ -381,20 +398,6 @@ describe("settings", () => {
     await expect(loadStartOnLogin()).resolves.toBe(DEFAULT_START_ON_LOGIN)
   })
 
-  it("loads default widget layout when missing", async () => {
-    await expect(loadWidgetLayout()).resolves.toBe(DEFAULT_WIDGET_LAYOUT)
-  })
-
-  it("loads and saves widget layout", async () => {
-    await saveWidgetLayout("horizontal")
-    await expect(loadWidgetLayout()).resolves.toBe("horizontal")
-  })
-
-  it("falls back to default for invalid widget layout", async () => {
-    storeState.set("widgetLayout", "diagonal")
-    await expect(loadWidgetLayout()).resolves.toBe(DEFAULT_WIDGET_LAYOUT)
-  })
-
   it("loads default widget visibility when missing", async () => {
     await expect(loadWidgetVisible()).resolves.toBe(DEFAULT_WIDGET_VISIBLE)
   })
@@ -405,19 +408,8 @@ describe("settings", () => {
   })
 
   it("falls back to default for invalid widget visibility", async () => {
-    storeState.set("widgetVisible", "yes")
+    storeState.set("taskbarWidgetVisible", "yes")
     await expect(loadWidgetVisible()).resolves.toBe(DEFAULT_WIDGET_VISIBLE)
-  })
-
-  it("returns null widget position when missing or invalid", async () => {
-    await expect(loadWidgetPosition()).resolves.toBeNull()
-    storeState.set("widgetPosition", { x: "a", y: 1 })
-    await expect(loadWidgetPosition()).resolves.toBeNull()
-  })
-
-  it("loads and saves widget position", async () => {
-    await saveWidgetPosition({ x: 12, y: 34 })
-    await expect(loadWidgetPosition()).resolves.toEqual({ x: 12, y: 34 })
   })
 
   it("loads default widget provider ids when missing", async () => {
@@ -439,17 +431,35 @@ describe("settings", () => {
     await expect(loadWidgetProviderIds()).resolves.toBe(DEFAULT_WIDGET_PROVIDER_IDS)
   })
 
-  it("loads default widget zoom when missing", async () => {
-    await expect(loadWidgetZoom()).resolves.toBe(DEFAULT_WIDGET_ZOOM)
+  it("loads default widget provider metrics when missing", async () => {
+    await expect(loadWidgetProviderMetrics()).resolves.toEqual(DEFAULT_WIDGET_PROVIDER_METRICS)
   })
 
-  it("loads and saves widget zoom", async () => {
-    await saveWidgetZoom(1.25)
-    await expect(loadWidgetZoom()).resolves.toBe(1.25)
+  it("loads and saves widget provider metrics per plugin id", async () => {
+    await saveWidgetProviderMetrics({ "claude@1a2b3c4d": ["Session", "Weekly"], codex: [] })
+    await expect(loadWidgetProviderMetrics()).resolves.toEqual({
+      "claude@1a2b3c4d": ["Session", "Weekly"],
+      codex: [],
+    })
+    expect(storeSaveMock).toHaveBeenCalled()
   })
 
-  it("falls back to default for invalid widget zoom", async () => {
-    storeState.set("widgetZoom", 9)
-    await expect(loadWidgetZoom()).resolves.toBe(DEFAULT_WIDGET_ZOOM)
+  it("drops widget provider metric entries that are not string arrays", async () => {
+    storeState.set("widgetProviderMetrics", {
+      claude: ["Session"],
+      codex: "Weekly",
+      cursor: [1, "Total Usage"],
+      devin: null,
+      grok: ["Weekly", "Requests"],
+    })
+    await expect(loadWidgetProviderMetrics()).resolves.toEqual({
+      claude: ["Session"],
+      grok: ["Weekly", "Requests"],
+    })
+  })
+
+  it("falls back to default when the stored widget provider metrics are not an object", async () => {
+    storeState.set("widgetProviderMetrics", ["Session"])
+    await expect(loadWidgetProviderMetrics()).resolves.toEqual(DEFAULT_WIDGET_PROVIDER_METRICS)
   })
 })

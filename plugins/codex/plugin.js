@@ -1,854 +1,286 @@
 (function () {
-  const AUTH_FILE = "auth.json"
-  const CONFIG_AUTH_PATHS = ["~/.config/codex", "~/.codex"]
-  const KEYCHAIN_SERVICE = "Codex Auth"
   const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-  const REFRESH_URL = "https://auth.openai.com/oauth/token"
+  const TOKEN_URL = "https://auth.openai.com/oauth/token"
   const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
-  const REFRESH_AGE_MS = 8 * 24 * 60 * 60 * 1000
-  const ERR_NOT_LOGGED_IN = "Not logged in. Run `codex` to authenticate."
-  const ERR_SESSION_EXPIRED = "Session expired. Run `codex` to log in again."
-  const ERR_TOKEN_CONFLICT = "Token conflict. Run `codex` to log in again."
-  const ERR_TOKEN_REVOKED = "Token revoked. Run `codex` to log in again."
-  const ERR_TOKEN_EXPIRED = "Token expired. Run `codex` to log in again."
-  const ERR_USAGE_API_KEY = "Usage not available for API key."
-  const ERR_USAGE_CONNECTION = "Usage request failed. Check your connection."
-  const ERR_USAGE_AFTER_REFRESH = "Usage request failed after refresh. Try again."
+  const REFRESH_MARGIN_MS = 5 * 60 * 1000
+  const SESSION_MS = 5 * 60 * 60 * 1000
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+  // OpenAI sells ChatGPT credits at 4 cents each; the usage API reports only the count.
+  const CREDIT_USD = 0.04
+  const ERR_SIGN_IN = "Sign in again in Settings → Accounts."
+  const REFRESH_DENIED = ["invalid_grant", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated"]
 
-  function joinPath(base, leaf) {
-    return base.replace(/[\\/]+$/, "") + "/" + leaf
+  function isObj(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value)
   }
 
-  function readCodexHome(ctx) {
-    if (!ctx.host.env || typeof ctx.host.env.get !== "function") {
-      return null
-    }
+  function toNum(value) {
+    if (typeof value === "string" && value.trim() !== "") value = Number(value)
+    return typeof value === "number" && Number.isFinite(value) ? value : null
+  }
 
+  function send(ctx, opts) {
     try {
-      const value = ctx.host.env.get("CODEX_HOME")
-      if (typeof value !== "string") return null
-      const trimmed = value.trim()
-      return trimmed || null
+      return ctx.util.request(opts)
     } catch (e) {
-      ctx.host.log.warn("CODEX_HOME read failed: " + String(e))
-      return null
+      ctx.host.log.error("request failed: " + String(e))
+      throw "Network error. Check your connection."
     }
   }
 
-  function decodeHexUtf8(hex) {
+  function readCredentials(ctx) {
+    const creds = ctx.account && ctx.account.credentials
+    if (!isObj(creds) || typeof creds.access_token !== "string" || !creds.access_token) throw ERR_SIGN_IN
+    return creds
+  }
+
+  function errorCode(ctx, text) {
+    const json = ctx.util.tryParseJson(text)
+    if (!isObj(json)) return null
+    if (typeof json.error === "string") return json.error
+    if (isObj(json.error) && typeof json.error.code === "string") return json.error.code
+    return typeof json.code === "string" ? json.code : null
+  }
+
+  // expires_in wins; without it the access token's own exp is used; else keep the old value.
+  function expiryFrom(ctx, json, previous) {
+    if (typeof json.expires_in === "number") return Date.now() + json.expires_in * 1000
+    const claims = ctx.jwt.decodePayload(json.access_token)
+    if (isObj(claims) && typeof claims.exp === "number") return claims.exp * 1000
+    return previous
+  }
+
+  // Merges the token response over the stored credentials and saves the whole object.
+  function saveRefreshed(ctx, creds, resp) {
+    const code = errorCode(ctx, resp.bodyText)
+    if ([400, 401, 403].indexOf(resp.status) >= 0 && REFRESH_DENIED.indexOf(code) >= 0) {
+      ctx.host.log.warn("token refresh refused: " + code)
+      throw ERR_SIGN_IN
+    }
+    if (resp.status < 200 || resp.status > 299) {
+      throw "Token refresh failed (HTTP " + resp.status + "). Try again later."
+    }
+    const json = ctx.util.tryParseJson(resp.bodyText)
+    if (!isObj(json) || typeof json.access_token !== "string" || !json.access_token) {
+      throw "Token refresh response invalid. Try again later."
+    }
+    const merged = Object.assign({}, creds, json)
+    merged.expiresAt = expiryFrom(ctx, json, creds.expiresAt)
+    ctx.account.saveCredentials(JSON.stringify(merged))
+    return merged
+  }
+
+  function refreshCodex(ctx, creds) {
+    const resp = send(ctx, {
+      method: "POST",
+      url: TOKEN_URL,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      bodyText:
+        "grant_type=refresh_token" +
+        "&client_id=" + encodeURIComponent(CLIENT_ID) +
+        "&refresh_token=" + encodeURIComponent(creds.refresh_token),
+      timeoutMs: 15000,
+    })
+    return saveRefreshed(ctx, creds, resp)
+  }
+
+  // Refreshes ~5 min before expiry. If the refresh fails while the token is still valid, keep it (logged).
+  function refreshIfDue(ctx, creds, refresh) {
+    const nowMs = Date.now()
+    if (!creds.refresh_token || typeof creds.expiresAt !== "number") return creds
+    if (creds.expiresAt - REFRESH_MARGIN_MS > nowMs) return creds
     try {
-      const bytes = []
-      for (let i = 0; i < hex.length; i += 2) {
-        bytes.push(parseInt(hex.slice(i, i + 2), 16))
-      }
-
-      if (typeof TextDecoder !== "undefined") {
-        try {
-          return new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(bytes))
-        } catch {}
-      }
-
-      let escaped = ""
-      for (const b of bytes) {
-        const h = b.toString(16)
-        escaped += "%" + (h.length === 1 ? "0" + h : h)
-      }
-      return decodeURIComponent(escaped)
-    } catch {
-      return null
-    }
-  }
-
-  function tryParseAuthJson(ctx, text) {
-    if (!text) return null
-    const parsed = ctx.util.tryParseJson(text)
-    if (parsed) return parsed
-
-    // Some keychain payloads can be returned as hex-encoded UTF-8 bytes.
-    let hex = String(text).trim()
-    if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.slice(2)
-    if (!hex || hex.length % 2 !== 0) return null
-    if (!/^[0-9a-fA-F]+$/.test(hex)) return null
-
-    const decoded = decodeHexUtf8(hex)
-    if (!decoded) return null
-    return ctx.util.tryParseJson(decoded)
-  }
-
-  function resolveAuthPaths(ctx) {
-    const codexHome = readCodexHome(ctx)
-
-    // If CODEX_HOME is set, use it
-    if (codexHome) {
-      return [joinPath(codexHome, AUTH_FILE)]
-    }
-
-    return CONFIG_AUTH_PATHS.map((basePath) => joinPath(basePath, AUTH_FILE))
-  }
-
-  function hasTokenLikeAuth(auth) {
-    if (!auth || typeof auth !== "object") return false
-    if (auth.tokens && auth.tokens.access_token) return true
-    if (auth.OPENAI_API_KEY) return true
-    return false
-  }
-
-  function isAuthFallbackError(e) {
-    if (typeof e !== "string") return false
-    return (
-      e === ERR_SESSION_EXPIRED ||
-      e === ERR_TOKEN_CONFLICT ||
-      e === ERR_TOKEN_REVOKED ||
-      e === ERR_TOKEN_EXPIRED
-    )
-  }
-
-  function loadAuthFromKeychain(ctx) {
-    if (!ctx.host.keychain || typeof ctx.host.keychain.readGenericPassword !== "function") {
-      return null
-    }
-
-    try {
-      const value = ctx.host.keychain.readGenericPassword(KEYCHAIN_SERVICE)
-      if (!value) return null
-      const auth = tryParseAuthJson(ctx, value)
-      if (!hasTokenLikeAuth(auth)) {
-        ctx.host.log.warn("keychain has data but no codex auth payload")
-        return null
-      }
-      ctx.host.log.info("auth loaded from keychain: " + KEYCHAIN_SERVICE)
-      return { auth, authPath: null, source: "keychain" }
+      return refresh(creds)
     } catch (e) {
-      ctx.host.log.info("keychain read failed (may not exist): " + String(e))
-      return null
+      if (creds.expiresAt > nowMs) {
+        ctx.host.log.warn("early token refresh failed; keeping current token: " + String(e))
+        return creds
+      }
+      throw e
     }
   }
 
-  function saveAuth(ctx, authState) {
-    const auth = authState && authState.auth ? authState.auth : null
-    if (!auth) return false
-
-    if (authState.source === "file" && authState.authPath) {
-      ctx.host.fs.writeText(authState.authPath, JSON.stringify(auth, null, 2))
-      return true
-    }
-
-    if (authState.source === "keychain") {
-      if (!ctx.host.keychain || typeof ctx.host.keychain.writeGenericPassword !== "function") {
-        ctx.host.log.warn("keychain write unsupported in this host")
-        return false
-      }
-      // Use compact JSON to avoid newline-induced keychain encoding issues.
-      ctx.host.keychain.writeGenericPassword(KEYCHAIN_SERVICE, JSON.stringify(auth))
-      return true
-    }
-
-    return false
+  function accountIdOf(ctx, token) {
+    const claims = ctx.jwt.decodePayload(token)
+    const auth = isObj(claims) ? claims["https://api.openai.com/auth"] : null
+    const id = isObj(auth) ? auth.chatgpt_account_id : null
+    return typeof id === "string" && id ? id : null
   }
 
-  function loadFileAuthCandidates(ctx) {
-    const authPaths = resolveAuthPaths(ctx)
-    const candidates = []
-    const missingPaths = []
-    for (const authPath of authPaths) {
-      if (!ctx.host.fs.exists(authPath)) {
-        missingPaths.push(authPath)
-        continue
-      }
-      try {
-        const text = ctx.host.fs.readText(authPath)
-        const auth = tryParseAuthJson(ctx, text)
-        if (!hasTokenLikeAuth(auth)) {
-          ctx.host.log.warn("auth file exists but no valid codex auth payload: " + authPath)
-          continue
-        }
-        ctx.host.log.info("auth loaded from file: " + authPath)
-        candidates.push({ auth, authPath, source: "file" })
-      } catch (e) {
-        ctx.host.log.warn("auth file read failed: " + authPath + ": " + String(e))
-      }
-    }
-
-    return { candidates, missingPaths }
-  }
-
-  function needsRefresh(ctx, auth, nowMs) {
-    if (!auth.last_refresh) return true
-    const lastMs = ctx.util.parseDateMs(auth.last_refresh)
-    if (lastMs === null) return true
-    return nowMs - lastMs > REFRESH_AGE_MS
-  }
-
-  function refreshToken(ctx, authState) {
-    const auth = authState.auth
-    if (!auth.tokens || !auth.tokens.refresh_token) {
-      ctx.host.log.warn("refresh skipped: no refresh token")
-      return null
-    }
-
-    ctx.host.log.info("attempting token refresh")
-    try {
-      const resp = ctx.util.request({
-        method: "POST",
-        url: REFRESH_URL,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        bodyText:
-          "grant_type=refresh_token" +
-          "&client_id=" + encodeURIComponent(CLIENT_ID) +
-          "&refresh_token=" + encodeURIComponent(auth.tokens.refresh_token),
-        timeoutMs: 15000,
-      })
-
-      if (resp.status === 400 || resp.status === 401) {
-        let code = null
-        const body = ctx.util.tryParseJson(resp.bodyText)
-        if (body) {
-          code = body.error?.code || body.error || body.code
-        }
-        ctx.host.log.error("refresh failed: status=" + resp.status + " code=" + String(code))
-        if (code === "refresh_token_expired") {
-          throw ERR_SESSION_EXPIRED
-        }
-        if (code === "refresh_token_reused") {
-          throw ERR_TOKEN_CONFLICT
-        }
-        if (code === "refresh_token_invalidated") {
-          throw ERR_TOKEN_REVOKED
-        }
-        throw ERR_TOKEN_EXPIRED
-      }
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("refresh returned unexpected status: " + resp.status)
-        return null
-      }
-
-      const body = ctx.util.tryParseJson(resp.bodyText)
-      if (!body) {
-        ctx.host.log.warn("refresh response not valid JSON")
-        return null
-      }
-      const newAccessToken = body.access_token
-      if (!newAccessToken) {
-        ctx.host.log.warn("refresh response missing access_token")
-        return null
-      }
-
-      auth.tokens.access_token = newAccessToken
-      if (body.refresh_token) auth.tokens.refresh_token = body.refresh_token
-      if (body.id_token) auth.tokens.id_token = body.id_token
-      auth.last_refresh = new Date().toISOString()
-
-      try {
-        const saved = saveAuth(ctx, authState)
-        if (saved) {
-          ctx.host.log.info("refresh succeeded, auth persisted to " + authState.source)
-        } else {
-          ctx.host.log.warn("refresh succeeded but auth persistence was not possible")
-        }
-      } catch (e) {
-        ctx.host.log.warn("refresh succeeded but failed to save auth: " + String(e))
-      }
-
-      return newAccessToken
-    } catch (e) {
-      if (typeof e === "string") throw e
-      ctx.host.log.error("refresh exception: " + String(e))
-      return null
-    }
-  }
-
-  function fetchUsage(ctx, accessToken, accountId) {
+  function usageHeaders(ctx, token) {
     const headers = {
-      Authorization: "Bearer " + accessToken,
+      Authorization: "Bearer " + token,
       Accept: "application/json",
       "User-Agent": "OpenUsage",
     }
-    if (accountId) {
-      headers["ChatGPT-Account-Id"] = accountId
+    const accountId = accountIdOf(ctx, token)
+    if (accountId) headers["ChatGPT-Account-Id"] = accountId
+    return headers
+  }
+
+  function formatCodexPlan(value) {
+    if (typeof value !== "string") return null
+    const raw = value.trim()
+    if (!raw) return null
+    switch (raw.toLowerCase()) {
+      case "prolite": return "Pro 100"
+      case "pro": return "Pro 200"
+      case "promax": return "Pro 500"
+      case "self_serve_business_prolite": return "Business Premium"
+      default:
+        return raw
+          .split("_")
+          .filter(Boolean)
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(" ")
     }
-    return ctx.util.request({
-      method: "GET",
-      url: USAGE_URL,
-      headers,
-      timeoutMs: 10000,
+  }
+
+  function percentLine(ctx, label, used, resetsAt, periodMs) {
+    const opts = { label: label, used: used, limit: 100, format: { kind: "percent" }, periodDurationMs: periodMs }
+    if (resetsAt) opts.resetsAt = resetsAt
+    return ctx.line.progress(opts)
+  }
+
+  function periodOf(win) {
+    const seconds = win ? toNum(win.limit_window_seconds) : null
+    return seconds === null ? null : Math.round(seconds * 1000)
+  }
+
+  function resetOf(win, nowMs) {
+    const at = toNum(win.reset_at)
+    if (at !== null) return new Date(at * 1000).toISOString()
+    const after = toNum(win.reset_after_seconds)
+    return after !== null ? new Date(nowMs + after * 1000).toISOString() : null
+  }
+
+  // A window slot; a header-only percent (x-codex-*-used-percent) stands in when the window is missing.
+  function slotOf(win, headerPercent) {
+    const value = isObj(win) ? win : headerPercent === null ? null : {}
+    if (value === null) return null
+    const used = toNum(value.used_percent) !== null ? toNum(value.used_percent) : headerPercent
+    return { win: value, used: used }
+  }
+
+  // Each meter takes the window whose own duration matches it; otherwise the window in its own slot,
+  // when that window's duration is missing or unfamiliar.
+  function pushWindowMeters(ctx, lines, rateLimit, meters, headers, nowMs) {
+    const slots = [
+      slotOf(rateLimit ? rateLimit.primary_window : null, headers ? toNum(headers["x-codex-primary-used-percent"]) : null),
+      slotOf(rateLimit ? rateLimit.secondary_window : null, headers ? toNum(headers["x-codex-secondary-used-percent"]) : null),
+    ]
+    const familiar = meters.map((meter) => meter.periodMs)
+    meters.forEach((meter, index) => {
+      const exact = slots.find((slot) => slot && periodOf(slot.win) === meter.periodMs)
+      const own = slots[index]
+      const ownPeriod = own ? periodOf(own.win) : null
+      const fallback = own && (ownPeriod === null || familiar.indexOf(ownPeriod) < 0) ? own : null
+      const chosen = exact || fallback
+      if (!chosen || chosen.used === null) return
+      const periodMs = periodOf(chosen.win) !== null ? periodOf(chosen.win) : meter.periodMs
+      lines.push(percentLine(ctx, meter.label, chosen.used, resetOf(chosen.win, nowMs), periodMs))
     })
   }
 
-  function readPercent(value) {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : null
+  function sparkEntry(body) {
+    const list = Array.isArray(body.additional_rate_limits) ? body.additional_rate_limits : []
+    return list.find((entry) => isObj(entry) && [entry.limit_name, entry.metered_feature].some((name) =>
+      typeof name === "string" && name.toLowerCase().indexOf("spark") >= 0
+    )) || null
   }
 
-  function readNumber(value) {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : null
-  }
-
-  function readCreditsRemaining(resp, data) {
-    const credits = data && data.credits && typeof data.credits === "object" ? data.credits : null
-    if (credits) {
-      const bodyBalance = readNumber(credits.balance)
-      if (bodyBalance !== null) return bodyBalance
-      if (credits.has_credits === false) return 0
-    }
-
-    return readNumber(resp.headers["x-codex-credits-balance"])
-  }
-
-  function formatCodexPlan(ctx, planType) {
-    const rawPlan = typeof planType === "string" ? planType.trim() : ""
-    if (!rawPlan) return null
-    if (rawPlan.toLowerCase() === "prolite") return "Pro 5x"
-    if (rawPlan.toLowerCase() === "pro") return "Pro 20x"
-    return ctx.fmt.planLabel(rawPlan) || null
-  }
-
-  function getResetsAtIso(ctx, nowSec, window) {
-    if (!window) return null
-    if (typeof window.reset_at === "number") {
-      return ctx.util.toIso(window.reset_at)
-    }
-    if (typeof window.reset_after_seconds === "number") {
-      return ctx.util.toIso(nowSec + window.reset_after_seconds)
-    }
+  function headerFlag(value) {
+    if (value === "true") return true
+    if (value === "false") return false
     return null
   }
 
-  // Period durations in milliseconds
-  var PERIOD_SESSION_MS = 5 * 60 * 60 * 1000    // 5 hours
-  var PERIOD_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
-
-  function queryTokenUsage(ctx) {
-    if (!ctx.host.ccusage || typeof ctx.host.ccusage.query !== "function") {
-      return { status: "no_runner", data: null }
-    }
-
-    const since = new Date()
-    // Inclusive range: today + previous 30 days = 31 calendar days.
-    since.setDate(since.getDate() - 30)
-    const y = since.getFullYear()
-    const m = since.getMonth() + 1
-    const d = since.getDate()
-    const sinceStr = "" + y + (m < 10 ? "0" : "") + m + (d < 10 ? "0" : "") + d
-    const queryOpts = { provider: "codex", since: sinceStr }
-    const codexHome = readCodexHome(ctx)
-    if (codexHome) {
-      queryOpts.homePath = codexHome
-    }
-
-    const result = ctx.host.ccusage.query(queryOpts)
-    if (!result || typeof result !== "object" || typeof result.status !== "string") {
-      return { status: "runner_failed", data: null }
-    }
-    if (result.status !== "ok") {
-      return { status: result.status, data: null }
-    }
-    if (!result.data || !Array.isArray(result.data.daily)) {
-      return { status: "runner_failed", data: null }
-    }
-    return { status: "ok", data: result.data }
+  function creditsLine(ctx, body, headers) {
+    const credits = isObj(body.credits) ? body.credits : {}
+    const flag = typeof credits.has_credits === "boolean" ? credits.has_credits : headerFlag(headers["x-codex-credits-has-credits"])
+    if (flag === false) return null
+    const balance = toNum(credits.balance) !== null ? toNum(credits.balance) : toNum(headers["x-codex-credits-balance"])
+    if (balance === null) return null
+    const count = Math.max(0, Math.floor(balance))
+    return ctx.line.text({
+      label: "Extra Usage",
+      value: "$" + (count * CREDIT_USD).toFixed(2),
+      subtitle: count + " credits",
+    })
   }
 
-  function fmtTokens(n) {
-    const abs = Math.abs(n)
-    const sign = n < 0 ? "-" : ""
-    const units = [
-      { threshold: 1e9, divisor: 1e9, suffix: "B" },
-      { threshold: 1e6, divisor: 1e6, suffix: "M" },
-      { threshold: 1e3, divisor: 1e3, suffix: "K" },
-    ]
-    for (let i = 0; i < units.length; i++) {
-      const unit = units[i]
-      if (abs >= unit.threshold) {
-        const scaled = abs / unit.divisor
-        const formatted = scaled >= 10
-          ? Math.round(scaled).toString()
-          : scaled.toFixed(1).replace(/\.0$/, "")
-        return sign + formatted + unit.suffix
-      }
-    }
-    return sign + Math.round(abs).toString()
+  function creditLimitLine(ctx, body) {
+    const spend = isObj(body.spend_control) ? body.spend_control : null
+    const limit = spend && isObj(spend.individual_limit) ? spend.individual_limit : null
+    if (!limit) return null
+    const used = toNum(limit.used)
+    const cap = toNum(limit.limit)
+    if (used === null || used < 0 || cap === null || cap < 0) return null
+    const opts = { label: "Credit Limit", used: used, limit: cap, format: { kind: "count", suffix: "credits" } }
+    const resetAt = toNum(limit.reset_at)
+    if (resetAt !== null) opts.resetsAt = new Date(resetAt * 1000).toISOString()
+    return ctx.line.progress(opts)
   }
 
-  function dayKeyFromDate(date) {
-    const year = date.getFullYear()
-    const month = date.getMonth() + 1
-    const day = date.getDate()
-    return year + "-" + (month < 10 ? "0" : "") + month + "-" + (day < 10 ? "0" : "") + day
-  }
+  function usageLines(ctx, body, headers, nowMs) {
+    const lines = []
+    const rateLimit = isObj(body.rate_limit) ? body.rate_limit : null
+    pushWindowMeters(ctx, lines, rateLimit, [
+      { label: "Session", periodMs: SESSION_MS },
+      { label: "Weekly", periodMs: WEEK_MS },
+    ], headers, nowMs)
 
-  function dayKeyFromUsageDate(rawDate) {
-    if (typeof rawDate !== "string") return null
-    const value = rawDate.trim()
-    if (!value) return null
-
-    const isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-    if (isoMatch) {
-      return isoMatch[1] + "-" + isoMatch[2] + "-" + isoMatch[3]
+    const spark = sparkEntry(body)
+    if (spark && isObj(spark.rate_limit)) {
+      pushWindowMeters(ctx, lines, spark.rate_limit, [
+        { label: "Spark", periodMs: SESSION_MS },
+        { label: "Spark Weekly", periodMs: WEEK_MS },
+      ], null, nowMs)
     }
 
-    const isoDatePrefixMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[Tt\s]|$)/)
-    if (isoDatePrefixMatch) {
-      return isoDatePrefixMatch[1] + "-" + isoDatePrefixMatch[2] + "-" + isoDatePrefixMatch[3]
-    }
-
-    const compactMatch = value.match(/^(\d{4})(\d{2})(\d{2})$/)
-    if (compactMatch) {
-      return compactMatch[1] + "-" + compactMatch[2] + "-" + compactMatch[3]
-    }
-
-    const ms = Date.parse(value)
-    if (!Number.isFinite(ms)) return null
-    return dayKeyFromDate(new Date(ms))
-  }
-
-  function usageCostUsd(day) {
-    if (!day || typeof day !== "object") return null
-
-    if (day.totalCost != null) {
-      const totalCost = Number(day.totalCost)
-      if (Number.isFinite(totalCost)) return totalCost
-    }
-
-    if (day.costUSD != null) {
-      const costUSD = Number(day.costUSD)
-      if (Number.isFinite(costUSD)) return costUSD
-    }
-
-    return null
-  }
-
-  function costAndTokensLabel(data, opts) {
-    const includeZeroTokens = !!(opts && opts.includeZeroTokens)
-    const parts = []
-    if (data.costUSD != null) parts.push("$" + data.costUSD.toFixed(2))
-    if (data.tokens > 0 || (includeZeroTokens && data.tokens === 0)) {
-      parts.push(fmtTokens(data.tokens) + " tokens")
-    }
-    return parts.join(" · ")
-  }
-
-  function modelTokenCount(modelUsage) {
-    if (!modelUsage || typeof modelUsage !== "object") return 0
-    const total = Number(modelUsage.totalTokens)
-    if (Number.isFinite(total) && total > 0) return total
-
-    const fields = [
-      "inputTokens",
-      "cachedInputTokens",
-      "cacheCreationTokens",
-      "cacheReadTokens",
-      "outputTokens",
-      "reasoningOutputTokens",
-    ]
-    let sum = 0
-    for (let i = 0; i < fields.length; i++) {
-      const n = Number(modelUsage[fields[i]])
-      if (Number.isFinite(n) && n > 0) sum += n
-    }
-    return sum
-  }
-
-  function collectModelUsage(daily) {
-    const totals = {}
-    let totalTokens = 0
-    for (let i = 0; i < daily.length; i++) {
-      const day = daily[i]
-      const models = day && day.models
-      if (models && typeof models === "object") {
-        const names = Object.keys(models)
-        for (let j = 0; j < names.length; j++) {
-          const name = names[j]
-          const tokens = modelTokenCount(models[name])
-          if (tokens <= 0) continue
-          totals[name] = (totals[name] || 0) + tokens
-          totalTokens += tokens
-        }
-      }
-
-      const breakdowns = day && day.modelBreakdowns
-      if (Array.isArray(breakdowns)) {
-        for (let j = 0; j < breakdowns.length; j++) {
-          const breakdown = breakdowns[j]
-          const name = String(
-            (breakdown && (breakdown.modelName || breakdown.name || breakdown.model)) || ""
-          ).trim()
-          if (!name) continue
-          const tokens = modelTokenCount(breakdown)
-          if (tokens <= 0) continue
-          totals[name] = (totals[name] || 0) + tokens
-          totalTokens += tokens
-        }
-      }
-    }
-
-    if (totalTokens <= 0) return []
-    return Object.keys(totals)
-      .map((name) => ({ name, tokens: totals[name], percent: (totals[name] / totalTokens) * 100 }))
-      .sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name))
-  }
-
-  function percentLabel(value) {
-    if (value > 0 && value < 0.1) return "<0.1%"
-    const rounded = Math.round(value * 10) / 10
-    return (rounded % 1 === 0 ? String(Math.round(rounded)) : String(rounded)) + "%"
-  }
-
-  function pushModelUsageLines(lines, ctx, daily) {
-    const models = collectModelUsage(daily)
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i]
-      lines.push(ctx.line.text({
-        label: model.name,
-        value: percentLabel(model.percent),
-      }))
-    }
-  }
-
-  function usageDayLabel(rawDate) {
-    const key = dayKeyFromUsageDate(rawDate)
-    if (!key) return String(rawDate || "").slice(0, 10) || "Usage"
-    const month = Number(key.slice(5, 7))
-    const day = Number(key.slice(8, 10))
-    return month + "/" + day
-  }
-
-  function collectUsageChartPoints(daily) {
-    const points = []
-    for (let i = 0; i < daily.length; i++) {
-      const day = daily[i]
-      const tokens = Number(day && day.totalTokens)
-      if (!Number.isFinite(tokens) || tokens < 0) continue
-      const key = dayKeyFromUsageDate(day.date)
-      if (!key) continue
-      points.push({
-        key: key,
-        label: usageDayLabel(day.date),
-        value: tokens,
-        valueLabel: fmtTokens(tokens) + " tokens",
-      })
-    }
-    return points
-      .sort((a, b) => a.key.localeCompare(b.key))
-      .slice(-31)
-      .map((point) => ({
-        label: point.label,
-        value: point.value,
-        valueLabel: point.valueLabel,
-      }))
-  }
-
-  function pushUsageChartLine(lines, ctx, daily) {
-    const points = collectUsageChartPoints(daily)
-    if (points.length === 0) return
-    lines.push(ctx.line.barChart({
-      label: "Usage Trend",
-      points: points,
-      note: "Estimated from local Codex logs for the selected account.",
-      color: "#74AA9C",
-    }))
-  }
-
-  function pushDayUsageLine(lines, ctx, label, dayEntry) {
-    const tokens = Number(dayEntry && dayEntry.totalTokens) || 0
-    const cost = usageCostUsd(dayEntry)
-    if (tokens > 0) {
-      lines.push(ctx.line.text({
-        label: label,
-        value: costAndTokensLabel({ tokens: tokens, costUSD: cost })
-      }))
-      return
-    }
-
-    lines.push(ctx.line.text({
-      label: label,
-      value: costAndTokensLabel({ tokens: 0, costUSD: 0 }, { includeZeroTokens: true })
-    }))
-  }
-
-  function probeWithAuthState(ctx, authState) {
-    const auth = authState.auth
-
-    if (auth.tokens && auth.tokens.access_token) {
-      const nowMs = Date.now()
-      let accessToken = auth.tokens.access_token
-      const accountId = auth.tokens.account_id
-
-      if (needsRefresh(ctx, auth, nowMs)) {
-        ctx.host.log.info("token needs refresh (age > " + (REFRESH_AGE_MS / 1000 / 60 / 60 / 24) + " days)")
-        const refreshed = refreshToken(ctx, authState)
-        if (refreshed) {
-          accessToken = refreshed
-        } else {
-          ctx.host.log.warn("proactive refresh failed, trying with existing token")
-        }
-      }
-
-      let resp
-      let didRefresh = false
-      try {
-        resp = ctx.util.retryOnceOnAuth({
-          request: (token) => {
-            try {
-              return fetchUsage(ctx, token || accessToken, accountId)
-            } catch (e) {
-              ctx.host.log.error("usage request exception: " + String(e))
-              if (didRefresh) {
-                throw ERR_USAGE_AFTER_REFRESH
-              }
-              throw ERR_USAGE_CONNECTION
-            }
-          },
-          refresh: () => {
-            ctx.host.log.info("usage returned 401, attempting refresh")
-            didRefresh = true
-            return refreshToken(ctx, authState)
-          },
-        })
-      } catch (e) {
-        if (typeof e === "string") throw e
-        ctx.host.log.error("usage request failed: " + String(e))
-        throw ERR_USAGE_CONNECTION
-      }
-
-      if (ctx.util.isAuthStatus(resp.status)) {
-        ctx.host.log.error("usage returned auth error after all retries: status=" + resp.status)
-        throw ERR_TOKEN_EXPIRED
-      }
-
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.error("usage returned error: status=" + resp.status)
-        throw "Usage request failed (HTTP " + String(resp.status) + "). Try again later."
-      }
-
-      ctx.host.log.info("usage fetch succeeded")
-
-      const data = ctx.util.tryParseJson(resp.bodyText)
-      if (data === null) {
-        throw "Usage response invalid. Try again later."
-      }
-
-      const lines = []
-      const nowSec = Math.floor(Date.now() / 1000)
-      const rateLimit = data.rate_limit || null
-      const primaryWindow = rateLimit && rateLimit.primary_window ? rateLimit.primary_window : null
-      const secondaryWindow = rateLimit && rateLimit.secondary_window ? rateLimit.secondary_window : null
-      const reviewWindow =
-        data.code_review_rate_limit && data.code_review_rate_limit.primary_window
-          ? data.code_review_rate_limit.primary_window
-          : null
-
-      const headerPrimary = readPercent(resp.headers["x-codex-primary-used-percent"])
-      const headerSecondary = readPercent(resp.headers["x-codex-secondary-used-percent"])
-
-      if (headerPrimary !== null) {
-        lines.push(ctx.line.progress({
-          label: "Session",
-          used: headerPrimary,
-          limit: 100,
-          format: { kind: "percent" },
-          resetsAt: getResetsAtIso(ctx, nowSec, primaryWindow),
-          periodDurationMs: PERIOD_SESSION_MS
-        }))
-      }
-      if (headerSecondary !== null) {
-        lines.push(ctx.line.progress({
-          label: "Weekly",
-          used: headerSecondary,
-          limit: 100,
-          format: { kind: "percent" },
-          resetsAt: getResetsAtIso(ctx, nowSec, secondaryWindow),
-          periodDurationMs: PERIOD_WEEKLY_MS
-        }))
-      }
-
-      if (lines.length === 0 && data.rate_limit) {
-        if (data.rate_limit.primary_window && typeof data.rate_limit.primary_window.used_percent === "number") {
-          lines.push(ctx.line.progress({
-            label: "Session",
-            used: data.rate_limit.primary_window.used_percent,
-            limit: 100,
-            format: { kind: "percent" },
-            resetsAt: getResetsAtIso(ctx, nowSec, primaryWindow),
-            periodDurationMs: PERIOD_SESSION_MS
-          }))
-        }
-        if (data.rate_limit.secondary_window && typeof data.rate_limit.secondary_window.used_percent === "number") {
-          lines.push(ctx.line.progress({
-            label: "Weekly",
-            used: data.rate_limit.secondary_window.used_percent,
-            limit: 100,
-            format: { kind: "percent" },
-            resetsAt: getResetsAtIso(ctx, nowSec, secondaryWindow),
-            periodDurationMs: PERIOD_WEEKLY_MS
-          }))
-        }
-      }
-
-      if (Array.isArray(data.additional_rate_limits)) {
-        for (const entry of data.additional_rate_limits) {
-          if (!entry || !entry.rate_limit) continue
-          const name = typeof entry.limit_name === "string" ? entry.limit_name : ""
-          let shortName = name.replace(/^GPT-[\d.]+-Codex-/, "")
-          if (!shortName) shortName = name || "Model"
-          const rl = entry.rate_limit
-          if (rl.primary_window && typeof rl.primary_window.used_percent === "number") {
-            lines.push(ctx.line.progress({
-              label: shortName,
-              used: rl.primary_window.used_percent,
-              limit: 100,
-              format: { kind: "percent" },
-              resetsAt: getResetsAtIso(ctx, nowSec, rl.primary_window),
-              periodDurationMs: typeof rl.primary_window.limit_window_seconds === "number"
-                ? rl.primary_window.limit_window_seconds * 1000
-                : PERIOD_SESSION_MS
-            }))
-          }
-          if (rl.secondary_window && typeof rl.secondary_window.used_percent === "number") {
-            lines.push(ctx.line.progress({
-              label: shortName + " Weekly",
-              used: rl.secondary_window.used_percent,
-              limit: 100,
-              format: { kind: "percent" },
-              resetsAt: getResetsAtIso(ctx, nowSec, rl.secondary_window),
-              periodDurationMs: typeof rl.secondary_window.limit_window_seconds === "number"
-                ? rl.secondary_window.limit_window_seconds * 1000
-                : PERIOD_WEEKLY_MS
-            }))
-          }
-        }
-      }
-
-      if (reviewWindow) {
-        const used = reviewWindow.used_percent
-        if (typeof used === "number") {
-          lines.push(ctx.line.progress({
-            label: "Reviews",
-            used: used,
-            limit: 100,
-            format: { kind: "percent" },
-            resetsAt: getResetsAtIso(ctx, nowSec, reviewWindow),
-            periodDurationMs: PERIOD_WEEKLY_MS // code_review_rate_limit is a 7-day window
-          }))
-        }
-      }
-
-      const creditsRemaining = readCreditsRemaining(resp, data)
-      if (creditsRemaining !== null) {
-        const remaining = creditsRemaining
-        const limit = 1000
-        const used = Math.max(0, Math.min(limit, limit - remaining))
-        lines.push(ctx.line.progress({
-          label: "Credits",
-          used: used,
-          limit: limit,
-          format: { kind: "count", suffix: "credits" },
-        }))
-      }
-
-      let plan = null
-      if (data.plan_type) {
-        const planLabel = formatCodexPlan(ctx, data.plan_type)
-        if (planLabel) {
-          plan = planLabel
-        }
-      }
-
-      const tokenUsageResult = queryTokenUsage(ctx)
-      if (tokenUsageResult.status === "ok") {
-        const tokenUsage = tokenUsageResult.data
-        const now = new Date()
-        const todayKey = dayKeyFromDate(now)
-        const yesterday = new Date(now.getTime())
-        yesterday.setDate(yesterday.getDate() - 1)
-        const yesterdayKey = dayKeyFromDate(yesterday)
-
-        let todayEntry = null
-        let yesterdayEntry = null
-        for (let i = 0; i < tokenUsage.daily.length; i++) {
-          const usageDayKey = dayKeyFromUsageDate(tokenUsage.daily[i].date)
-          if (usageDayKey === todayKey) {
-            todayEntry = tokenUsage.daily[i]
-            continue
-          }
-          if (usageDayKey === yesterdayKey) {
-            yesterdayEntry = tokenUsage.daily[i]
-          }
-        }
-
-        pushDayUsageLine(lines, ctx, "Today", todayEntry)
-        pushDayUsageLine(lines, ctx, "Yesterday", yesterdayEntry)
-
-        let totalTokens = 0
-        let totalCostNanos = 0
-        let hasCost = false
-        for (let i = 0; i < tokenUsage.daily.length; i++) {
-          const day = tokenUsage.daily[i]
-          const dayTokens = Number(day.totalTokens)
-          if (Number.isFinite(dayTokens)) {
-            totalTokens += dayTokens
-          }
-
-          const dayCost = usageCostUsd(day)
-          if (dayCost != null) {
-            totalCostNanos += Math.round(dayCost * 1e9)
-            hasCost = true
-          }
-        }
-
-        if (totalTokens > 0) {
-          lines.push(ctx.line.text({
-            label: "Last 30 Days",
-            value: costAndTokensLabel({ tokens: totalTokens, costUSD: hasCost ? totalCostNanos / 1e9 : null })
-          }))
-        }
-
-        pushUsageChartLine(lines, ctx, tokenUsage.daily)
-        pushModelUsageLines(lines, ctx, tokenUsage.daily)
-      }
-
-      if (lines.length === 0) {
-        lines.push(ctx.line.badge({ label: "Status", text: "No usage data", color: "#a3a3a3" }))
-      }
-
-      return { plan: plan, lines: lines }
-    }
-
-    if (auth.OPENAI_API_KEY) {
-      throw ERR_USAGE_API_KEY
-    }
-
-    throw ERR_NOT_LOGGED_IN
+    const credits = creditsLine(ctx, body, headers)
+    if (credits) lines.push(credits)
+    const creditLimit = creditLimitLine(ctx, body)
+    if (creditLimit) lines.push(creditLimit)
+    return lines
   }
 
   function probe(ctx) {
-    const fileAuth = loadFileAuthCandidates(ctx)
-    let lastAuthFallbackError = null
-    for (let i = 0; i < fileAuth.candidates.length; i++) {
-      const authState = fileAuth.candidates[i]
-      try {
-        return probeWithAuthState(ctx, authState)
-      } catch (e) {
-        if (!isAuthFallbackError(e)) {
-          throw e
-        }
-        lastAuthFallbackError = e
-        ctx.host.log.warn("auth failed for file " + authState.authPath + ", trying next auth source: " + String(e))
-      }
+    let creds = readCredentials(ctx)
+    creds = refreshIfDue(ctx, creds, (c) => refreshCodex(ctx, c))
+
+    let current = creds
+    const resp = ctx.util.retryOnceOnAuth({
+      request: (token) => send(ctx, {
+        method: "GET",
+        url: USAGE_URL,
+        headers: usageHeaders(ctx, token || current.access_token),
+        timeoutMs: 10000,
+      }),
+      refresh: () => {
+        if (!current.refresh_token) return null
+        current = refreshCodex(ctx, current)
+        return current.access_token
+      },
+    })
+
+    const idClaims = typeof current.id_token === "string" && current.id_token
+      ? ctx.jwt.decodePayload(current.id_token)
+      : null
+    const email = isObj(idClaims) && typeof idClaims.email === "string" ? idClaims.email : null
+    if (email) ctx.account.setLabel(email)
+
+    if (ctx.util.isAuthStatus(resp.status)) throw ERR_SIGN_IN
+    if (resp.status < 200 || resp.status > 299) {
+      throw "Usage request failed (HTTP " + resp.status + "). Try again later."
     }
-
-    const keychainAuth = loadAuthFromKeychain(ctx)
-    if (keychainAuth) return probeWithAuthState(ctx, keychainAuth)
-
-    if (lastAuthFallbackError) throw lastAuthFallbackError
-
-    for (const authPath of fileAuth.missingPaths) {
-      ctx.host.log.warn("auth file not found: " + authPath)
+    const body = ctx.util.tryParseJson(resp.bodyText)
+    if (!isObj(body)) throw "Usage response invalid. Try again later."
+    return {
+      plan: formatCodexPlan(body.plan_type),
+      lines: usageLines(ctx, body, resp.headers || {}, Date.now()),
     }
-
-    ctx.host.log.error("probe failed: not logged in")
-    throw ERR_NOT_LOGGED_IN
   }
 
-  globalThis.__openusage_plugin = { id: "codex", probe }
+  globalThis.__openusage_plugin = { id: "codex", probe: probe }
 })()

@@ -3,7 +3,6 @@ import ReactDOM from "react-dom/client";
 import { error as logError, warn as logWarn } from "@tauri-apps/plugin-log";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
-import { WidgetApp } from "./widget/WidgetApp";
 import { SettingsWindowApp } from "./settings-window/SettingsWindowApp";
 import "./index.css";
 
@@ -42,8 +41,6 @@ console.warn = (...args: unknown[]) => {
 
 function pickRoot() {
   switch (getWindowLabel()) {
-    case "widget":
-      return WidgetApp;
     case "settings":
       return SettingsWindowApp;
     default:

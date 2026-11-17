@@ -1,11 +1,29 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { describe, expect, it, vi } from "vitest"
 import { OverviewPage } from "@/pages/overview"
+import { openSettingsTab } from "@/lib/settings-window"
+
+vi.mock("@/lib/settings-window", () => ({
+  openSettingsTab: vi.fn(() => Promise.resolve()),
+}))
 
 describe("OverviewPage", () => {
+  it("renders loading state before settings are ready", () => {
+    render(<OverviewPage plugins={[]} loading resetTimerDisplayMode="relative" />)
+    expect(screen.getByText("Loading providers...")).toBeInTheDocument()
+    expect(screen.queryByText("No providers enabled")).toBeNull()
+  })
+
   it("renders empty state", () => {
     render(<OverviewPage plugins={[]} displayMode="used" resetTimerDisplayMode="relative" />)
     expect(screen.getByText("No providers enabled")).toBeInTheDocument()
+  })
+
+  it("opens the Accounts tab from the empty state", async () => {
+    render(<OverviewPage plugins={[]} resetTimerDisplayMode="relative" />)
+    await userEvent.click(screen.getByRole("button", { name: "Add an account" }))
+    expect(openSettingsTab).toHaveBeenCalledWith("accounts")
   })
 
   it("renders provider cards", () => {

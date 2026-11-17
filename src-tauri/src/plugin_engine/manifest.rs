@@ -34,6 +34,10 @@ pub struct PluginManifest {
     pub lines: Vec<ManifestLine>,
     #[serde(default)]
     pub links: Vec<PluginLink>,
+    /// In-app sign-in spec (see accounts::login::AuthSpec). With it, the
+    /// plugin runs once per account instead of reading local files.
+    #[serde(default)]
+    pub auth: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]

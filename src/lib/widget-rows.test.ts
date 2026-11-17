@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { buildWidgetRows } from "@/lib/widget-rows"
+import {
+  buildWidgetRows,
+  getDefaultProviderMetrics,
+  getProviderMetricOptions,
+} from "@/lib/widget-rows"
 import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
-import {
-  WIDGET_METRIC_ALL,
-  WIDGET_METRIC_MOST_USED,
-  WIDGET_METRIC_SUGESTAO,
-  type PluginSettings,
-} from "@/lib/settings"
+import type { PluginSettings } from "@/lib/settings"
 
 function meta(id: string, labels: string[], name = id): PluginMeta {
   return {
@@ -48,7 +47,7 @@ describe("buildWidgetRows", () => {
     expect(buildWidgetRows({ pluginsMeta: [], pluginSettings: null, pluginStates: {} })).toEqual([])
   })
 
-  it("shows the used fraction of the primary bar per provider", () => {
+  it("shows the used fraction of the first shown metric per provider", () => {
     const rows = buildWidgetRows({
       pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
       pluginSettings: settings(["claude"]),
@@ -61,7 +60,7 @@ describe("buildWidgetRows", () => {
     })
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ id: "claude", name: "Claude", iconUrl: "claude.svg" })
-    // Primary candidate is the first match → Weekly 25/100.
+    // Default claude selection is Session + Weekly; the first in plugin order is Weekly 25/100.
     expect(rows[0].fraction).toBeCloseTo(0.25, 4)
     expect(rows[0].tone).toBe("neutral")
   })
@@ -136,6 +135,7 @@ describe("buildWidgetRows", () => {
     })
     expect(rows).toHaveLength(1)
     expect(rows[0].fraction).toBeNull()
+    expect(rows[0].metrics).toEqual([])
     expect(rows[0].limitedUntilMs).toBeUndefined()
   })
 
@@ -152,11 +152,13 @@ describe("buildWidgetRows", () => {
           { label: "Session", used: 100, limit: 100, resetsAt: sessionResetsAt, periodDurationMs: 5 * 60 * 60 * 1000 },
         ]),
       },
+      widgetProviderMetrics: { claude: ["Weekly"] },
       nowMs,
     })
     expect(rows[0].limitedUntilMs).toBe(Date.parse(sessionResetsAt))
     expect(rows[0].tone).toBe("behind")
     expect(rows[0].fraction).toBeCloseTo(0.45, 4)
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Weekly"])
   })
 
   it("uses the latest reset when several limits are reached", () => {
@@ -177,7 +179,41 @@ describe("buildWidgetRows", () => {
     expect(rows[0].limitedUntilMs).toBe(Date.parse(weeklyResetsAt))
   })
 
-  it("most-used mode shows the provider's most constrained metric", () => {
+  it("default metrics for an account instance use the base provider (Session + Weekly)", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude@1a2b3c4d", ["Session", "Weekly", "Sonnet"], "Claude · work")],
+      pluginSettings: settings(["claude@1a2b3c4d"]),
+      pluginStates: {
+        "claude@1a2b3c4d": state("claude@1a2b3c4d", [
+          { label: "Weekly", used: 25, limit: 100 },
+          { label: "Session", used: 80, limit: 100 },
+          { label: "Sonnet", used: 10, limit: 100 },
+        ]),
+      },
+    })
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly"])
+  })
+
+  it("shows only the selected metrics, in plugin line order", () => {
+    const rows = buildWidgetRows({
+      pluginsMeta: [meta("claude", ["Session", "Weekly", "Sonnet"], "Claude")],
+      pluginSettings: settings(["claude"]),
+      pluginStates: {
+        claude: state("claude", [
+          { label: "Session", used: 80, limit: 100 },
+          { label: "Weekly", used: 25, limit: 100 },
+          { label: "Sonnet", used: 10, limit: 100 },
+        ]),
+      },
+      // Selection order differs from the plugin's line order on purpose.
+      widgetProviderMetrics: { claude: ["Sonnet", "Weekly"] },
+    })
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Weekly", "Sonnet"])
+    expect(rows[0].metrics!.map((m) => m.fraction)).toEqual([0.25, 0.1])
+    expect(rows[0].fraction).toBeCloseTo(0.25, 4)
+  })
+
+  it("a single selected metric is the only one shown", () => {
     const rows = buildWidgetRows({
       pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
       pluginSettings: settings(["claude"]),
@@ -187,64 +223,43 @@ describe("buildWidgetRows", () => {
           { label: "Session", used: 80, limit: 100 },
         ]),
       },
-      widgetMetric: WIDGET_METRIC_MOST_USED,
+      widgetProviderMetrics: { claude: ["Session"] },
     })
-    expect(rows[0].metrics).toHaveLength(1)
-    expect(rows[0].metrics![0].label).toBe("Session")
-    expect(rows[0].metrics![0].fraction).toBeCloseTo(0.8, 4)
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session"])
     expect(rows[0].fraction).toBeCloseTo(0.8, 4)
   })
 
-  it("all mode shows every metric of the provider in order", () => {
+  it("an empty selection hides the provider", () => {
     const rows = buildWidgetRows({
-      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
-      pluginSettings: settings(["claude"]),
+      pluginsMeta: [meta("claude", ["Weekly"]), meta("codex", ["Weekly"])],
+      pluginSettings: settings(["claude", "codex"]),
       pluginStates: {
-        claude: state("claude", [
-          { label: "Weekly", used: 25, limit: 100 },
-          { label: "Session", used: 80, limit: 100 },
-        ]),
+        claude: state("claude", [{ label: "Weekly", used: 1, limit: 10 }]),
+        codex: state("codex", [{ label: "Weekly", used: 1, limit: 10 }]),
       },
-      widgetMetric: WIDGET_METRIC_ALL,
+      widgetProviderMetrics: { claude: [] },
     })
-    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Weekly", "Session"])
-    expect(rows[0].metrics!.map((m) => m.fraction)).toEqual([0.25, 0.8])
+    expect(rows.map((r) => r.id)).toEqual(["codex"])
   })
 
-  it("multi modes keep providers without data as a dash row", () => {
+  it("keeps a provider with a selection but no data as a dash row", () => {
     const rows = buildWidgetRows({
       pluginsMeta: [meta("claude", ["Weekly"])],
       pluginSettings: settings(["claude"]),
       pluginStates: {},
-      widgetMetric: WIDGET_METRIC_ALL,
+      widgetProviderMetrics: { claude: ["Weekly"] },
     })
     expect(rows).toHaveLength(1)
     expect(rows[0].fraction).toBeNull()
     expect(rows[0].metrics).toEqual([])
   })
 
-  it("single metric pick is unaffected by the pseudo modes", () => {
-    const rows = buildWidgetRows({
-      pluginsMeta: [meta("claude", ["Weekly", "Session"], "Claude")],
-      pluginSettings: settings(["claude"]),
-      pluginStates: {
-        claude: state("claude", [
-          { label: "Weekly", used: 25, limit: 100 },
-          { label: "Session", used: 80, limit: 100 },
-        ]),
-      },
-      widgetMetric: "Session",
-    })
-    expect(rows[0].metrics).toBeUndefined()
-    expect(rows[0].fraction).toBeCloseTo(0.8, 4)
-  })
-
-  it("sugestao mode shows suggested metrics per known provider", () => {
+  it("default metrics per known provider follow the suggestion list", () => {
     const rows = buildWidgetRows({
       pluginsMeta: [
         meta("codex", ["Session", "Weekly", "Spark", "Spark Weekly"], "Codex"),
         meta("claude", ["Session", "Weekly", "Extra"], "Claude"),
-        meta("cursor", ["Total usage", "Requests"], "Cursor"),
+        meta("cursor", ["Total Usage", "Requests"], "Cursor"),
       ],
       pluginSettings: settings(["codex", "claude", "cursor"]),
       pluginStates: {
@@ -260,20 +275,18 @@ describe("buildWidgetRows", () => {
           { label: "Extra", used: 90, limit: 100 },
         ]),
         cursor: state("cursor", [
-          { label: "Total usage", used: 60, limit: 100 },
+          { label: "Total Usage", used: 60, limit: 100 },
           { label: "Requests", used: 70, limit: 100 },
         ]),
       },
-      widgetMetric: WIDGET_METRIC_SUGESTAO,
     })
 
     expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly", "Spark", "Spark Weekly"])
-    expect(rows[0].metrics!.every((m) => m.hidePercentSign)).toBe(true)
     expect(rows[1].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly"])
-    expect(rows[2].metrics!.map((m) => m.label)).toEqual(["Total usage"])
+    expect(rows[2].metrics!.map((m) => m.label)).toEqual(["Total Usage"])
   })
 
-  it("sugestao mode only shows Spark metrics when Codex data has usage", () => {
+  it("default metrics only include Spark metrics when Codex data has usage", () => {
     const rows = buildWidgetRows({
       pluginsMeta: [meta("codex", ["Session", "Weekly", "Spark", "Spark Weekly"], "Codex")],
       pluginSettings: settings(["codex"]),
@@ -285,27 +298,46 @@ describe("buildWidgetRows", () => {
           { label: "Spark Weekly", used: 0, limit: 100 },
         ]),
       },
-      widgetMetric: WIDGET_METRIC_SUGESTAO,
     })
 
     expect(rows[0].metrics!.map((m) => m.label)).toEqual(["Session", "Weekly"])
   })
 
-  it("sugestao mode does not invent metrics for unknown providers", () => {
+  it("default metrics for unknown providers are the first two primary candidates", () => {
+    const other = { ...meta("other", ["A", "B", "C"], "Other"), primaryCandidates: ["C", "A", "B"] }
+    expect(getDefaultProviderMetrics(other)).toEqual(["C", "A"])
+
     const rows = buildWidgetRows({
-      pluginsMeta: [meta("other", ["Session", "Weekly"], "Other")],
+      pluginsMeta: [other],
       pluginSettings: settings(["other"]),
       pluginStates: {
         other: state("other", [
-          { label: "Session", used: 25, limit: 100 },
-          { label: "Weekly", used: 50, limit: 100 },
+          { label: "A", used: 25, limit: 100 },
+          { label: "B", used: 50, limit: 100 },
+          { label: "C", used: 75, limit: 100 },
         ]),
       },
-      widgetMetric: WIDGET_METRIC_SUGESTAO,
     })
+    // Shown in plugin line order, not candidate order.
+    expect(rows[0].metrics!.map((m) => m.label)).toEqual(["A", "C"])
+  })
 
-    expect(rows[0].metrics).toEqual([])
-    expect(rows[0].fraction).toBeNull()
+  it("default metrics fall back to the first two manifest progress lines", () => {
+    const bare: PluginMeta = { ...meta("bare", ["X", "Y", "Z"]), primaryCandidates: [] }
+    expect(getDefaultProviderMetrics(bare)).toEqual(["X", "Y"])
+  })
+
+  it("lists manifest progress labels once, in manifest order", () => {
+    const withText: PluginMeta = {
+      ...meta("p", []),
+      lines: [
+        { type: "progress", label: "A", scope: "overview" },
+        { type: "text", label: "T", scope: "overview" },
+        { type: "progress", label: "B", scope: "detail" },
+        { type: "progress", label: "A", scope: "detail" },
+      ],
+    }
+    expect(getProviderMetricOptions(withText)).toEqual(["A", "B"])
   })
 
   it("passes expected fraction through rows and metrics", () => {
@@ -321,7 +353,6 @@ describe("buildWidgetRows", () => {
           { label: "Session", used: 80, limit: 100, resetsAt, periodDurationMs: periodMs },
         ]),
       },
-      widgetMetric: WIDGET_METRIC_ALL,
       nowMs,
     })
 

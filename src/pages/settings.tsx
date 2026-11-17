@@ -16,34 +16,25 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Minus, Plus } from "lucide-react";
+import { GripVertical } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { GlobalShortcutSection } from "@/components/global-shortcut-section";
+import { AccountsTab } from "@/components/accounts/accounts-tab";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { WidgetMetricsSection } from "@/components/widget-metrics-section";
 import {
   AUTO_UPDATE_OPTIONS,
   RESET_TIMER_DISPLAY_OPTIONS,
   THEME_OPTIONS,
-  WIDGET_LAYOUT_OPTIONS,
-  WIDGET_METRIC_ALL,
-  WIDGET_METRIC_MOST_USED,
-  WIDGET_METRIC_SUGESTAO,
   type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type WidgetLayout,
-  type WidgetMetric,
   type WidgetProviderIds,
+  type WidgetProviderMetrics,
 } from "@/lib/settings";
-import {
-  adjustWidgetZoom,
-  formatWidgetZoomPercent,
-  WIDGET_ZOOM_MAX,
-  WIDGET_ZOOM_MIN,
-  WIDGET_ZOOM_SETTINGS_STEP,
-} from "@/lib/widget-zoom";
+import type { PluginMeta } from "@/lib/plugin-types";
 import { getTimeFormatter } from "@/lib/reset-tooltip";
 import { cn } from "@/lib/utils";
 
@@ -132,17 +123,13 @@ interface SettingsPageProps {
   onStatsShortcutChange: (value: GlobalShortcut) => void;
   startOnLogin: boolean;
   onStartOnLoginChange: (value: boolean) => void;
-  widgetLayout: WidgetLayout;
-  onWidgetLayoutChange: (value: WidgetLayout) => void;
   widgetVisible: boolean;
   onWidgetVisibleChange: (value: boolean) => void;
+  pluginsMeta: PluginMeta[];
   widgetProviderIds: WidgetProviderIds;
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void;
-  widgetMetric: WidgetMetric;
-  onWidgetMetricChange: (value: WidgetMetric) => void;
-  widgetZoom: number;
-  onWidgetZoomChange: (value: number) => void;
-  availableMetrics: string[];
+  widgetProviderMetrics: WidgetProviderMetrics;
+  onWidgetProviderMetricsChange: (value: WidgetProviderMetrics) => void;
   activeTab?: string;
   onActiveTabChange?: (tab: string) => void;
 }
@@ -163,17 +150,13 @@ export function SettingsPage({
   onStatsShortcutChange,
   startOnLogin,
   onStartOnLoginChange,
-  widgetLayout,
-  onWidgetLayoutChange,
   widgetVisible,
   onWidgetVisibleChange,
+  pluginsMeta,
   widgetProviderIds,
   onWidgetProviderIdsChange,
-  widgetMetric,
-  onWidgetMetricChange,
-  widgetZoom,
-  onWidgetZoomChange,
-  availableMetrics,
+  widgetProviderMetrics,
+  onWidgetProviderMetricsChange,
   activeTab,
   onActiveTabChange,
 }: SettingsPageProps) {
@@ -202,25 +185,19 @@ export function SettingsPage({
       onReorder(next.map((item) => item.id));
     }
   };
-  const enabledWidgetProviderIds = widgetProviderIds ?? plugins
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => plugin.id);
-  const widgetProviderIdSet = new Set(enabledWidgetProviderIds);
-  const handleWidgetProviderToggle = (pluginId: string, checked: boolean) => {
-    const next = new Set(enabledWidgetProviderIds);
-    if (checked) next.add(pluginId);
-    else next.delete(pluginId);
-    onWidgetProviderIdsChange(plugins.filter((plugin) => next.has(plugin.id)).map((plugin) => plugin.id));
-  };
-
   return (
     <Tabs value={effectiveTab} onValueChange={handleTabChange} className="py-3">
       <TabsList className="w-full">
+        <TabsTrigger value="accounts">Accounts</TabsTrigger>
         <TabsTrigger value="general">General</TabsTrigger>
         <TabsTrigger value="plugins">Plugins</TabsTrigger>
         <TabsTrigger value="widget">Widget</TabsTrigger>
         <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
       </TabsList>
+
+      <TabsContent value="accounts" className="space-y-4">
+        <AccountsTab />
+      </TabsContent>
 
       <TabsContent value="general" className="space-y-4">
       <section>
@@ -360,117 +337,16 @@ export function SettingsPage({
       </TabsContent>
 
       <TabsContent value="widget" className="space-y-4">
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Floating Widget</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          Always-on-top usage strip
-        </p>
-        <label className="flex items-center gap-2 text-sm select-none text-foreground mb-2">
-          <Checkbox
-            key={`widget-visible-${widgetVisible}`}
-            checked={widgetVisible}
-            onCheckedChange={(checked) => onWidgetVisibleChange(checked === true)}
-          />
-          Show floating widget
-        </label>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Widget layout">
-            {WIDGET_LAYOUT_OPTIONS.map((option) => {
-              const isActive = option.value === widgetLayout;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onWidgetLayoutChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground mt-3 mb-1">Zoom</p>
-        <div className="bg-muted/50 rounded-lg p-1 flex items-center justify-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Decrease widget zoom"
-            disabled={widgetZoom <= WIDGET_ZOOM_MIN}
-            onClick={() => onWidgetZoomChange(adjustWidgetZoom(widgetZoom, -WIDGET_ZOOM_SETTINGS_STEP))}
-          >
-            <Minus className="size-4" />
-          </Button>
-          <span
-            className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums"
-            aria-live="polite"
-            aria-label="Widget zoom"
-          >
-            {formatWidgetZoomPercent(widgetZoom)}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Increase widget zoom"
-            disabled={widgetZoom >= WIDGET_ZOOM_MAX}
-            onClick={() => onWidgetZoomChange(adjustWidgetZoom(widgetZoom, WIDGET_ZOOM_SETTINGS_STEP))}
-          >
-            <Plus className="size-4" />
-          </Button>
-        </div>
-        <p className="text-sm text-muted-foreground mt-3 mb-1">Metric</p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Widget metric">
-            {[
-              { value: WIDGET_METRIC_SUGESTAO as WidgetMetric, label: "Auto" },
-              { value: WIDGET_METRIC_MOST_USED as WidgetMetric, label: "Most used" },
-              { value: WIDGET_METRIC_ALL as WidgetMetric, label: "All" },
-              ...availableMetrics.map((m) => ({ value: m as WidgetMetric, label: m })),
-            ].map((option) => {
-              const isActive = (widgetMetric ?? null) === option.value;
-              return (
-                <Button
-                  key={option.label}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => onWidgetMetricChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground mt-3 mb-1">Providers</p>
-        <div className="bg-muted/50 rounded-lg p-1 space-y-1">
-          {plugins.filter((plugin) => plugin.enabled).map((plugin) => (
-            <label
-              key={`widget-provider-${plugin.id}`}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 rounded-md bg-card text-sm select-none",
-                !plugin.enabled && "text-muted-foreground"
-              )}
-            >
-              <Checkbox
-                key={`widget-provider-${plugin.id}-${widgetProviderIdSet.has(plugin.id)}`}
-                checked={widgetProviderIdSet.has(plugin.id)}
-                disabled={!plugin.enabled}
-                onCheckedChange={(checked) => handleWidgetProviderToggle(plugin.id, checked === true)}
-              />
-              <span className="flex-1">{plugin.name}</span>
-            </label>
-          ))}
-        </div>
-      </section>
+      <WidgetMetricsSection
+        plugins={plugins}
+        pluginsMeta={pluginsMeta}
+        widgetVisible={widgetVisible}
+        onWidgetVisibleChange={onWidgetVisibleChange}
+        widgetProviderIds={widgetProviderIds}
+        onWidgetProviderIdsChange={onWidgetProviderIdsChange}
+        widgetProviderMetrics={widgetProviderMetrics}
+        onWidgetProviderMetricsChange={onWidgetProviderMetricsChange}
+      />
       </TabsContent>
 
       <TabsContent value="shortcuts" className="space-y-4">

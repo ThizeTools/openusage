@@ -1,105 +1,132 @@
 (function () {
-  const KEYCHAIN_SERVICE = "OpenUsage-copilot";
-  const GH_KEYCHAIN_SERVICE = "gh:github.com";
-  const USAGE_URL = "https://api.github.com/copilot_internal/user";
+  const USAGE_URL = "https://api.github.com/copilot_internal/user"
+  const USER_URL = "https://api.github.com/user"
+  const SIGN_IN_AGAIN = "Sign in again in Settings → Accounts."
+  const MONTH_MS = 30 * 24 * 60 * 60 * 1000
 
-  function readJson(ctx, path) {
-    try {
-      if (!ctx.host.fs.exists(path)) return null;
-      const text = ctx.host.fs.readText(path);
-      return ctx.util.tryParseJson(text);
-    } catch (e) {
-      ctx.host.log.warn("readJson failed for " + path + ": " + String(e));
-      return null;
+  function readToken(ctx) {
+    const creds = ctx.account && ctx.account.credentials
+    if (!creds || typeof creds.access_token !== "string" || !creds.access_token) {
+      throw SIGN_IN_AGAIN
     }
+    return creds.access_token
   }
 
-  function writeJson(ctx, path, value) {
-    try {
-      ctx.host.fs.writeText(path, JSON.stringify(value));
-    } catch (e) {
-      ctx.host.log.warn("writeJson failed for " + path + ": " + String(e));
+  function num(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : null
     }
+    return null
   }
 
-  function saveToken(ctx, token) {
-    try {
-      ctx.host.keychain.writeGenericPassword(
-        KEYCHAIN_SERVICE,
-        JSON.stringify({ token: token }),
-      );
-    } catch (e) {
-      ctx.host.log.warn("keychain write failed: " + String(e));
-    }
-    writeJson(ctx, ctx.app.pluginDataDir + "/auth.json", { token: token });
+  function clampPercent(value) {
+    return Math.min(100, Math.max(0, value))
   }
 
-  function clearCachedToken(ctx) {
-    try {
-      ctx.host.keychain.deleteGenericPassword(KEYCHAIN_SERVICE);
-    } catch (e) {
-      ctx.host.log.info("keychain delete failed: " + String(e));
-    }
-    writeJson(ctx, ctx.app.pluginDataDir + "/auth.json", null);
+  function planLabel(value) {
+    if (typeof value !== "string") return undefined
+    const words = value.trim().split(/[_\s-]+/).filter(Boolean)
+    if (words.length === 0) return undefined
+    return words
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ")
   }
 
-  function loadTokenFromKeychain(ctx) {
-    try {
-      const raw = ctx.host.keychain.readGenericPassword(KEYCHAIN_SERVICE);
-      if (raw) {
-        const parsed = ctx.util.tryParseJson(raw);
-        if (parsed && parsed.token) {
-          ctx.host.log.info("token loaded from OpenUsage keychain");
-          return { token: parsed.token, source: "keychain" };
-        }
+  function percentLine(ctx, label, used, resetsAt) {
+    const opts = {
+      label: label,
+      used: used,
+      limit: 100,
+      format: { kind: "percent" },
+      periodDurationMs: MONTH_MS,
+    }
+    if (resetsAt) opts.resetsAt = resetsAt
+    return ctx.line.progress(opts)
+  }
+
+  function snapshotLine(ctx, label, snapshot, resetsAt) {
+    if (!snapshot || typeof snapshot !== "object") return null
+    const entitlement = num(snapshot.entitlement)
+    const remaining = num(snapshot.remaining)
+    // Unlimited: explicit flag or GitHub's -1 sentinel. Hidden.
+    if (snapshot.unlimited === true || entitlement === -1 || remaining === -1) return null
+    if (entitlement === 0) return null
+
+    const percentRemaining = num(snapshot.percent_remaining)
+    let used
+    if (percentRemaining !== null) {
+      used = clampPercent(100 - percentRemaining)
+    } else if (entitlement !== null && entitlement > 0 && remaining !== null) {
+      used = clampPercent(100 - (remaining / entitlement) * 100)
+    } else {
+      return null
+    }
+    return percentLine(ctx, label, used, resetsAt)
+  }
+
+  function limitedLine(ctx, label, remainingRaw, totalRaw, resetsAt) {
+    const total = num(totalRaw)
+    const remaining = num(remainingRaw)
+    if (total === null || total <= 0 || remaining === null) return null
+    const used = Math.max(0, total - remaining)
+    return percentLine(ctx, label, clampPercent((used / total) * 100), resetsAt)
+  }
+
+  function mapUsage(ctx, body) {
+    const plan = planLabel(body.copilot_plan)
+    const resetsAt =
+      ctx.util.toIso(body.quota_reset_date) ||
+      ctx.util.toIso(body.limited_user_reset_date) ||
+      null
+    const snapshots =
+      body.quota_snapshots && typeof body.quota_snapshots === "object"
+        ? body.quota_snapshots
+        : {}
+    const premium = snapshots.premium_interactions
+    const lines = []
+
+    const credits = snapshotLine(ctx, "Credits", premium, resetsAt)
+    if (credits) {
+      lines.push(credits)
+      if (premium && premium.overage_permitted === true) {
+        const overage = Math.max(0, num(premium.overage_count) || 0)
+        lines.push(ctx.line.text({ label: "Extra Usage", value: String(overage) }))
       }
-    } catch (e) {
-      ctx.host.log.info("OpenUsage keychain read failed: " + String(e));
     }
-    return null;
-  }
 
-  function loadTokenFromGhCli(ctx) {
-    try {
-      const raw = ctx.host.keychain.readGenericPassword(GH_KEYCHAIN_SERVICE);
-      if (raw) {
-        let token = raw;
-        if (
-          typeof token === "string" &&
-          token.indexOf("go-keyring-base64:") === 0
-        ) {
-          token = ctx.base64.decode(token.slice("go-keyring-base64:".length));
-        }
-        if (token) {
-          ctx.host.log.info("token loaded from gh CLI keychain");
-          return { token: token, source: "gh-cli" };
-        }
+    const chat = snapshotLine(ctx, "Chat", snapshots.chat, resetsAt)
+    if (chat) lines.push(chat)
+    const completions = snapshotLine(ctx, "Completions", snapshots.completions, resetsAt)
+    if (completions) lines.push(completions)
+
+    if (lines.length === 0) {
+      const limited = body.limited_user_quotas || {}
+      const monthly = body.monthly_quotas || {}
+      const limitedChat = limitedLine(ctx, "Chat", limited.chat, monthly.chat, resetsAt)
+      if (limitedChat) lines.push(limitedChat)
+      const limitedCompletions = limitedLine(
+        ctx, "Completions", limited.completions, monthly.completions, resetsAt
+      )
+      if (limitedCompletions) lines.push(limitedCompletions)
+    }
+
+    if (lines.length === 0) {
+      if (body.token_based_billing !== true) {
+        throw "Copilot usage data is unavailable for this account."
       }
-    } catch (e) {
-      ctx.host.log.info("gh CLI keychain read failed: " + String(e));
+      const used = premium ? num(premium.credits_used) : null
+      if (used !== null && used > 0) {
+        lines.push(ctx.line.text({ label: "Credits", value: String(used) }))
+      }
     }
-    return null;
-  }
 
-  function loadTokenFromStateFile(ctx) {
-    const data = readJson(ctx, ctx.app.pluginDataDir + "/auth.json");
-    if (data && data.token) {
-      ctx.host.log.info("token loaded from state file");
-      return { token: data.token, source: "state" };
-    }
-    return null;
-  }
-
-  function loadToken(ctx) {
-    return (
-      loadTokenFromKeychain(ctx) ||
-      loadTokenFromGhCli(ctx) ||
-      loadTokenFromStateFile(ctx)
-    );
+    return { plan: plan, lines: lines }
   }
 
   function fetchUsage(ctx, token) {
-    return ctx.util.request({
+    const resp = ctx.host.http.request({
       method: "GET",
       url: USAGE_URL,
       headers: {
@@ -110,155 +137,53 @@
         "User-Agent": "GitHubCopilotChat/0.26.7",
         "X-Github-Api-Version": "2025-04-01",
       },
-      timeoutMs: 10000,
-    });
-  }
-
-  function makeProgressLine(ctx, label, snapshot, resetDate) {
-    if (!snapshot || typeof snapshot.percent_remaining !== "number")
-      return null;
-    const usedPercent = Math.min(100, Math.max(0, 100 - snapshot.percent_remaining));
-    return ctx.line.progress({
-      label: label,
-      used: usedPercent,
-      limit: 100,
-      format: { kind: "percent" },
-      resetsAt: ctx.util.toIso(resetDate),
-      periodDurationMs: 30 * 24 * 60 * 60 * 1000,
-    });
-  }
-
-  function makeLimitedProgressLine(ctx, label, remaining, total, resetDate) {
-    if (typeof remaining !== "number" || typeof total !== "number" || total <= 0)
-      return null;
-    const used = total - remaining;
-    const usedPercent = Math.min(100, Math.max(0, Math.round((used / total) * 100)));
-    return ctx.line.progress({
-      label: label,
-      used: usedPercent,
-      limit: 100,
-      format: { kind: "percent" },
-      resetsAt: ctx.util.toIso(resetDate),
-      periodDurationMs: 30 * 24 * 60 * 60 * 1000,
-    });
-  }
-
-  function probe(ctx) {
-    const cred = loadToken(ctx);
-    if (!cred) {
-      throw "Not logged in. Run `gh auth login` first.";
-    }
-
-    let token = cred.token;
-    let source = cred.source;
-
-    let resp;
-    try {
-      resp = fetchUsage(ctx, token);
-    } catch (e) {
-      ctx.host.log.error("usage request exception: " + String(e));
-      throw "Usage request failed. Check your connection.";
-    }
-
-    if (resp.status === 401 || resp.status === 403) {
-      // If cached token is stale, clear it and try fallback sources
-      if (source === "keychain") {
-        ctx.host.log.info("cached token invalid, trying fallback sources");
-        clearCachedToken(ctx);
-        const fallback = loadTokenFromGhCli(ctx);
-        if (fallback) {
-          try {
-            resp = fetchUsage(ctx, fallback.token);
-          } catch (e) {
-            ctx.host.log.error("fallback usage request exception: " + String(e));
-            throw "Usage request failed. Check your connection.";
-          }
-          if (resp.status >= 200 && resp.status < 300) {
-            // Fallback worked, persist the new token
-            saveToken(ctx, fallback.token);
-            token = fallback.token;
-            source = fallback.source;
-          }
-        }
-      }
-      // Still failing after retry
-      if (resp.status === 401 || resp.status === 403) {
-        throw "Token invalid. Run `gh auth login` to re-authenticate.";
-      }
-    }
-
+      timeoutMs: 15000,
+    })
+    if (resp.status === 401 || resp.status === 403) throw SIGN_IN_AGAIN
     if (resp.status < 200 || resp.status >= 300) {
-      ctx.host.log.error("usage returned error: status=" + resp.status);
-      throw (
-        "Usage request failed (HTTP " +
-        String(resp.status) +
-        "). Try again later."
-      );
+      throw "Request failed (HTTP " + resp.status + "). Try again later."
     }
-
-    // Persist gh-cli token to OpenUsage keychain for future use
-    if (source === "gh-cli") {
-      saveToken(ctx, token);
+    const body = ctx.util.tryParseJson(resp.bodyText)
+    if (!body || typeof body !== "object") {
+      throw "Invalid response from GitHub. Try again later."
     }
-
-    const data = ctx.util.tryParseJson(resp.bodyText);
-    if (data === null) {
-      throw "Usage response invalid. Try again later.";
-    }
-
-    ctx.host.log.info("usage fetch succeeded");
-
-    const lines = [];
-    let plan = null;
-    if (data.copilot_plan) {
-      plan = ctx.fmt.planLabel(data.copilot_plan);
-    }
-
-    // Paid tier: quota_snapshots
-    const snapshots = data.quota_snapshots;
-    if (snapshots) {
-      const premiumLine = makeProgressLine(
-        ctx,
-        "Premium",
-        snapshots.premium_interactions,
-        data.quota_reset_date,
-      );
-      if (premiumLine) lines.push(premiumLine);
-
-      const chatLine = makeProgressLine(
-        ctx,
-        "Chat",
-        snapshots.chat,
-        data.quota_reset_date,
-      );
-      if (chatLine) lines.push(chatLine);
-    }
-
-    // Free tier: limited_user_quotas
-    if (data.limited_user_quotas && data.monthly_quotas) {
-      const lq = data.limited_user_quotas;
-      const mq = data.monthly_quotas;
-      const resetDate = data.limited_user_reset_date;
-
-      const chatLine = makeLimitedProgressLine(ctx, "Chat", lq.chat, mq.chat, resetDate);
-      if (chatLine) lines.push(chatLine);
-
-      const completionsLine = makeLimitedProgressLine(ctx, "Completions", lq.completions, mq.completions, resetDate);
-      if (completionsLine) lines.push(completionsLine);
-    }
-
-    if (lines.length === 0) {
-      lines.push(
-        ctx.line.badge({
-          label: "Status",
-          text: "No usage data",
-          color: "#a3a3a3",
-        }),
-      );
-    }
-
-    return { plan: plan, lines: lines };
+    return body
   }
 
-  globalThis.__openusage_plugin = { id: "copilot", probe };
-})();
+  // Sets the account name to the GitHub login. A failed read keeps the current name.
+  function syncLabel(ctx, token) {
+    try {
+      const resp = ctx.host.http.request({
+        method: "GET",
+        url: USER_URL,
+        headers: {
+          Authorization: "Bearer " + token,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "OpenUsage",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeoutMs: 10000,
+      })
+      if (resp.status < 200 || resp.status >= 300) {
+        ctx.host.log.warn("GitHub user read failed (HTTP " + resp.status + "); keeping account name")
+        return
+      }
+      const user = ctx.util.tryParseJson(resp.bodyText)
+      if (user && typeof user.login === "string" && user.login) {
+        ctx.account.setLabel(user.login)
+      }
+    } catch (e) {
+      ctx.host.log.warn("GitHub user read failed: " + String(e))
+    }
+  }
+
+  globalThis.__openusage_plugin = {
+    id: "copilot",
+    probe: function (ctx) {
+      const token = readToken(ctx)
+      const mapped = mapUsage(ctx, fetchUsage(ctx, token))
+      syncLabel(ctx, token)
+      return { lines: mapped.lines, plan: mapped.plan }
+    },
+  }
+})()

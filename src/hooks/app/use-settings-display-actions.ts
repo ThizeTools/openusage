@@ -4,12 +4,10 @@ import {
   saveMenubarIconStyle,
   saveResetTimerDisplayMode,
   saveThemeMode,
-  saveWidgetLayout,
   saveWidgetProviderIds,
   type MenubarIconStyle,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type WidgetLayout,
   type WidgetProviderIds,
 } from "@/lib/settings"
 
@@ -20,7 +18,6 @@ type UseSettingsDisplayActionsArgs = {
   resetTimerDisplayMode: ResetTimerDisplayMode
   setResetTimerDisplayMode: (value: ResetTimerDisplayMode) => void
   setMenubarIconStyle: (value: MenubarIconStyle) => void
-  setWidgetLayout: (value: WidgetLayout) => void
   setWidgetVisible: (value: boolean) => void
   setWidgetProviderIds: (value: WidgetProviderIds) => void
   scheduleTrayIconUpdate: ScheduleTrayIconUpdate
@@ -31,7 +28,6 @@ export function useSettingsDisplayActions({
   resetTimerDisplayMode,
   setResetTimerDisplayMode,
   setMenubarIconStyle,
-  setWidgetLayout,
   setWidgetVisible,
   setWidgetProviderIds,
   scheduleTrayIconUpdate,
@@ -63,14 +59,6 @@ export function useSettingsDisplayActions({
     })
   }, [scheduleTrayIconUpdate, setMenubarIconStyle])
 
-  const handleWidgetLayoutChange = useCallback((layout: WidgetLayout) => {
-    setWidgetLayout(layout)
-    // Widget window stays in sync via the shared store's onKeyChange listener.
-    void saveWidgetLayout(layout).catch((error) => {
-      console.error("Failed to save widget layout:", error)
-    })
-  }, [setWidgetLayout])
-
   const handleWidgetVisibleChange = useCallback((visible: boolean) => {
     setWidgetVisible(visible)
     if (!isTauri()) return
@@ -92,7 +80,6 @@ export function useSettingsDisplayActions({
     handleResetTimerDisplayModeChange,
     handleResetTimerDisplayModeToggle,
     handleMenubarIconStyleChange,
-    handleWidgetLayoutChange,
     handleWidgetVisibleChange,
     handleWidgetProviderIdsChange,
   }

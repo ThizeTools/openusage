@@ -6,9 +6,20 @@
   "entry": "plugin.js",
   "icon": "icon.svg",
   "brandColor": "#000000",
+  "auth": {
+    "kind": "oauth-pkce",
+    "authorizeUrl": "https://app.devin.ai/auth/cli/continue",
+    "tokenUrl": "https://api.devin.ai/auth/cli/token",
+    "redirectHost": "127.0.0.1",
+    "redirectPort": 0,
+    "redirectPath": "/callback",
+    "authorizeParams": { "prompt": "select_account" },
+    "tokenEncoding": "json",
+    "tokenParams": ["code", "code_verifier"]
+  },
   "lines": [
     { "type": "progress", "label": "Weekly quota", "scope": "overview", "primaryOrder": 1 },
-    { "type": "progress", "label": "Daily quota", "scope": "overview" },
+    { "type": "progress", "label": "Daily quota", "scope": "overview", "primaryOrder": 2 },
     { "type": "text", "label": "Extra usage balance", "scope": "detail" }
   ]
 }

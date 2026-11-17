@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useLayoutEffect, useRef } from "react"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 import type { PluginOutput } from "@/lib/plugin-types"
@@ -28,7 +28,7 @@ export function useProbeEvents({ onResult, onBatchComplete }: UseProbeEventsOpti
   const listenersReadyRef = useRef<Promise<void> | null>(null)
   const listenersReadyResolveRef = useRef<(() => void) | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let cancelled = false
 
     // Create the promise that will resolve when listeners are ready

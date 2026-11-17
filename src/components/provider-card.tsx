@@ -520,7 +520,7 @@ function MetricLineRenderer({
           markerValue={paceMarkerValue}
           refreshing={refreshing}
         />
-        <div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-0.5 mt-1.5">
+        <div className="flex flex-wrap justify-start items-center gap-x-3 gap-y-0.5 mt-1.5">
           <span className="text-xs text-muted-foreground tabular-nums">
             {metricsText}
           </span>
@@ -563,7 +563,7 @@ function MetricLineRenderer({
           )}
         </div>
         {runsOutText && (
-          <div className="flex justify-end items-center mt-0.5">
+          <div className="flex justify-start items-center mt-0.5">
             <span className="text-xs text-muted-foreground tabular-nums">
               {runsOutText}
             </span>

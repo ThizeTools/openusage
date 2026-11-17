@@ -6,9 +6,24 @@
   "entry": "plugin.js",
   "icon": "icon.svg",
   "brandColor": "#4285F4",
+  "auth": {
+    "kind": "oauth-pkce",
+    "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+    "tokenUrl": "https://oauth2.googleapis.com/token",
+    "clientId": "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+    "clientSecret": "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",
+    "scopes": "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email",
+    "redirectHost": "localhost",
+    "redirectPort": 51121,
+    "redirectPath": "/oauth-callback",
+    "authorizeParams": { "access_type": "offline", "prompt": "consent" },
+    "tokenEncoding": "form"
+  },
   "lines": [
-    { "type": "progress", "label": "Gemini Pro", "scope": "overview", "primaryOrder": 1 },
-    { "type": "progress", "label": "Gemini Flash", "scope": "overview" },
-    { "type": "progress", "label": "Claude", "scope": "overview" }
+    { "type": "progress", "label": "Gemini 5h", "scope": "overview", "primaryOrder": 1 },
+    { "type": "progress", "label": "Gemini weekly", "scope": "overview", "primaryOrder": 2 },
+    { "type": "progress", "label": "Claude 5h", "scope": "overview", "primaryOrder": 3 },
+    { "type": "progress", "label": "Claude weekly", "scope": "overview", "primaryOrder": 4 },
+    { "type": "progress", "label": "Argon weekly", "scope": "detail" }
   ]
 }

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "openrouter",
+  "name": "OpenRouter",
+  "version": "0.0.1",
+  "entry": "plugin.js",
+  "icon": "icon.svg",
+  "brandColor": "#6467F2",
+  "auth": {
+    "kind": "api-key",
+    "keyUrl": "https://openrouter.ai/settings/management-keys"
+  },
+  "links": [
+    { "label": "Status Page", "url": "https://status.openrouter.ai/" },
+    { "label": "Usage Dashboard", "url": "https://openrouter.ai/activity" },
+    { "label": "Credits", "url": "https://openrouter.ai/settings/credits" }
+  ],
+  "lines": [
+    { "type": "text", "label": "Balance", "scope": "overview" },
+    { "type": "text", "label": "Today", "scope": "overview" },
+    { "type": "text", "label": "Yesterday", "scope": "detail" },
+    { "type": "text", "label": "This Week", "scope": "detail" },
+    { "type": "text", "label": "This Month", "scope": "overview" },
+    { "type": "text", "label": "Prior 30 Days", "scope": "detail" },
+    { "type": "progress", "label": "Key Limit", "scope": "overview", "primaryOrder": 1 },
+    { "type": "progress", "label": "Budget", "scope": "overview", "primaryOrder": 2 },
+    { "type": "progress", "label": "Free Requests", "scope": "detail" }
+  ]
+}

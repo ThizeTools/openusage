@@ -637,7 +637,10 @@ fn parse_bar_chart_line<'js>(
     }
 
     if points.is_empty() {
-        errors.push(format!("barChart line at index {} has no valid points", idx));
+        errors.push(format!(
+            "barChart line at index {} has no valid points",
+            idx
+        ));
         return (None, errors);
     }
 
@@ -736,6 +739,7 @@ mod tests {
                 brand_color: None,
                 lines: vec![],
                 links: vec![],
+                auth: None,
             },
             plugin_dir: PathBuf::from("."),
             entry_script: entry_script.to_string(),

@@ -4,13 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const {
   saveResetTimerDisplayModeMock,
   saveThemeModeMock,
-  saveWidgetLayoutMock,
   invokeMock,
   isTauriMock,
 } = vi.hoisted(() => ({
   saveThemeModeMock: vi.fn(),
   saveResetTimerDisplayModeMock: vi.fn(),
-  saveWidgetLayoutMock: vi.fn(),
   invokeMock: vi.fn(),
   isTauriMock: vi.fn(),
 }))
@@ -24,7 +22,6 @@ vi.mock("@/lib/settings", () => ({
   saveThemeMode: saveThemeModeMock,
   saveResetTimerDisplayMode: saveResetTimerDisplayModeMock,
   saveMenubarIconStyle: vi.fn().mockResolvedValue(undefined),
-  saveWidgetLayout: saveWidgetLayoutMock,
 }))
 
 import { useSettingsDisplayActions } from "@/hooks/app/use-settings-display-actions"
@@ -33,18 +30,15 @@ describe("useSettingsDisplayActions", () => {
   beforeEach(() => {
     saveThemeModeMock.mockReset()
     saveResetTimerDisplayModeMock.mockReset()
-    saveWidgetLayoutMock.mockReset()
     invokeMock.mockReset()
     isTauriMock.mockReset()
     saveThemeModeMock.mockResolvedValue(undefined)
     saveResetTimerDisplayModeMock.mockResolvedValue(undefined)
-    saveWidgetLayoutMock.mockResolvedValue(undefined)
     invokeMock.mockResolvedValue(undefined)
     isTauriMock.mockReturnValue(true)
   })
 
-  it("changes widget layout and toggles widget visibility", () => {
-    const setWidgetLayout = vi.fn()
+  it("toggles widget visibility", () => {
     const setWidgetVisible = vi.fn()
 
     const { result } = renderHook(() =>
@@ -53,19 +47,15 @@ describe("useSettingsDisplayActions", () => {
         resetTimerDisplayMode: "relative",
         setResetTimerDisplayMode: vi.fn(),
         setMenubarIconStyle: vi.fn(),
-        setWidgetLayout,
         setWidgetVisible,
         scheduleTrayIconUpdate: vi.fn(),
       })
     )
 
     act(() => {
-      result.current.handleWidgetLayoutChange("horizontal")
       result.current.handleWidgetVisibleChange(true)
     })
 
-    expect(setWidgetLayout).toHaveBeenCalledWith("horizontal")
-    expect(saveWidgetLayoutMock).toHaveBeenCalledWith("horizontal")
     expect(setWidgetVisible).toHaveBeenCalledWith(true)
     expect(invokeMock).toHaveBeenCalledWith("set_widget_visible", { visible: true })
   })
@@ -81,7 +71,6 @@ describe("useSettingsDisplayActions", () => {
         resetTimerDisplayMode: "relative",
         setResetTimerDisplayMode,
         setMenubarIconStyle: vi.fn(),
-        setWidgetLayout: vi.fn(),
         setWidgetVisible: vi.fn(),
         scheduleTrayIconUpdate,
       })
@@ -109,7 +98,6 @@ describe("useSettingsDisplayActions", () => {
           resetTimerDisplayMode: mode,
           setResetTimerDisplayMode,
           setMenubarIconStyle: vi.fn(),
-          setWidgetLayout: vi.fn(),
           setWidgetVisible: vi.fn(),
           scheduleTrayIconUpdate: vi.fn(),
         }),
@@ -141,7 +129,6 @@ describe("useSettingsDisplayActions", () => {
         resetTimerDisplayMode: "relative",
         setResetTimerDisplayMode: vi.fn(),
         setMenubarIconStyle: vi.fn(),
-        setWidgetLayout: vi.fn(),
         setWidgetVisible: vi.fn(),
         scheduleTrayIconUpdate: vi.fn(),
       })

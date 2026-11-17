@@ -15,6 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: windows-latest
+            args: ""
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
           - platform: macos-latest
@@ -27,7 +29,13 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: swatinem/rust-cache@v2
@@ -81,6 +89,7 @@ jobs:
           fi
 
       - name: Import Apple Developer Certificate
+        if: matrix.platform == 'macos-latest'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

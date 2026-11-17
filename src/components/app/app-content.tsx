@@ -10,12 +10,14 @@ import type {
   GlobalShortcut,
   ResetTimerDisplayMode,
   ThemeMode,
-  WidgetLayout,
   WidgetProviderIds,
 } from "@/lib/settings"
 
 type AppContentDerivedProps = {
   displayPlugins: DisplayPluginState[]
+  pluginsReady: boolean
+  pluginLoadError?: string | null
+  onRetryPluginLoad?: () => void
   settingsPlugins: SettingsPluginState[]
   selectedPlugin: DisplayPluginState | null
 }
@@ -30,7 +32,6 @@ export type AppContentActionProps = {
   onResetTimerDisplayModeToggle: () => void
   onGlobalShortcutChange: (value: GlobalShortcut) => void
   onStartOnLoginChange: (value: boolean) => void
-  onWidgetLayoutChange: (value: WidgetLayout) => void
   onWidgetVisibleChange: (value: boolean) => void
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void
 }
@@ -39,6 +40,9 @@ export type AppContentProps = AppContentDerivedProps & AppContentActionProps
 
 export function AppContent({
   displayPlugins,
+  pluginsReady,
+  pluginLoadError,
+  onRetryPluginLoad,
   selectedPlugin,
   onRetryPlugin,
   onResetTimerDisplayModeToggle,
@@ -61,6 +65,9 @@ export function AppContent({
     return (
       <OverviewPage
         plugins={displayPlugins}
+        loading={!pluginsReady && !pluginLoadError}
+        error={pluginLoadError}
+        onRetry={onRetryPluginLoad}
         onRetryPlugin={onRetryPlugin}
         resetTimerDisplayMode={resetTimerDisplayMode}
         onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}

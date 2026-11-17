@@ -24,7 +24,7 @@ pub fn open(app_handle: &AppHandle) {
 fn apply_rounded_corners(window: &tauri::WebviewWindow) {
     use std::ffi::c_void;
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
     };
 
     let Ok(hwnd) = window.hwnd() else {

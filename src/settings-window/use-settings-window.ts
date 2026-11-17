@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
+import { emit } from "@tauri-apps/api/event"
 import {
   disable as disableAutostart,
   enable as enableAutostart,
   isEnabled as isAutostartEnabled,
 } from "@tauri-apps/plugin-autostart"
 import { LazyStore } from "@tauri-apps/plugin-store"
+import { useAccountsChanged } from "@/hooks/app/use-accounts-changed"
 import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
 import type { PluginMeta } from "@/lib/plugin-types"
-import { getAvailableWidgetMetrics } from "@/lib/widget-rows"
+import { reloadPluginList } from "@/lib/provider-discovery"
 import {
   DEFAULT_AUTO_UPDATE_INTERVAL,
   DEFAULT_GLOBAL_SHORTCUT,
@@ -16,11 +18,9 @@ import {
   DEFAULT_START_ON_LOGIN,
   DEFAULT_STATS_SHORTCUT,
   DEFAULT_THEME_MODE,
-  DEFAULT_WIDGET_LAYOUT,
-  DEFAULT_WIDGET_METRIC,
   DEFAULT_WIDGET_PROVIDER_IDS,
+  DEFAULT_WIDGET_PROVIDER_METRICS,
   DEFAULT_WIDGET_VISIBLE,
-  getEnabledPluginIds,
   loadAutoUpdateInterval,
   loadGlobalShortcut,
   loadPluginSettings,
@@ -28,11 +28,11 @@ import {
   loadStartOnLogin,
   loadStatsShortcut,
   loadThemeMode,
-  loadWidgetLayout,
-  loadWidgetMetric,
   loadWidgetProviderIds,
+  loadWidgetProviderMetrics,
   loadWidgetVisible,
   normalizePluginSettings,
+  parseWidgetProviderMetrics,
   savePluginSettings,
   saveAutoUpdateInterval,
   saveGlobalShortcut,
@@ -40,21 +40,18 @@ import {
   saveStartOnLogin,
   saveStatsShortcut,
   saveThemeMode,
-  saveWidgetLayout,
-  saveWidgetMetric,
   saveWidgetProviderIds,
-  saveWidgetZoom,
-  loadWidgetZoom,
+  saveWidgetProviderMetrics,
+  SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT,
+  SETTINGS_PLUGINS_CHANGED_EVENT,
   type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type PluginSettings,
   type ResetTimerDisplayMode,
   type ThemeMode,
-  type WidgetLayout,
-  type WidgetMetric,
   type WidgetProviderIds,
+  type WidgetProviderMetrics,
 } from "@/lib/settings"
-import { clampWidgetZoom, WIDGET_ZOOM_DEFAULT } from "@/lib/widget-zoom"
 
 /**
  * Self-contained settings state for the dedicated Settings window. It reads from
@@ -70,11 +67,10 @@ export function useSettingsWindow() {
   const [globalShortcut, setGlobalShortcut] = useState<GlobalShortcut>(DEFAULT_GLOBAL_SHORTCUT)
   const [statsShortcut, setStatsShortcut] = useState<GlobalShortcut>(DEFAULT_STATS_SHORTCUT)
   const [startOnLogin, setStartOnLogin] = useState<boolean>(DEFAULT_START_ON_LOGIN)
-  const [widgetLayout, setWidgetLayout] = useState<WidgetLayout>(DEFAULT_WIDGET_LAYOUT)
   const [widgetVisible, setWidgetVisible] = useState<boolean>(DEFAULT_WIDGET_VISIBLE)
   const [widgetProviderIds, setWidgetProviderIds] = useState<WidgetProviderIds>(DEFAULT_WIDGET_PROVIDER_IDS)
-  const [widgetMetric, setWidgetMetric] = useState<WidgetMetric>(DEFAULT_WIDGET_METRIC)
-  const [widgetZoom, setWidgetZoom] = useState(WIDGET_ZOOM_DEFAULT)
+  const [widgetProviderMetrics, setWidgetProviderMetrics] =
+    useState<WidgetProviderMetrics>(DEFAULT_WIDGET_PROVIDER_METRICS)
 
   useEffect(() => {
     if (!isTauri()) return
@@ -86,7 +82,7 @@ export function useSettingsWindow() {
         setPluginsMeta(meta)
         const [
           stored, interval, theme, resetTimer, shortcut, stats,
-          login, layout, visible, providers, metric, zoom,
+          login, visible, providers, providerMetrics,
         ] = await Promise.all([
           loadPluginSettings(),
           loadAutoUpdateInterval(),
@@ -95,11 +91,9 @@ export function useSettingsWindow() {
           loadGlobalShortcut(),
           loadStatsShortcut(),
           loadStartOnLogin(),
-          loadWidgetLayout(),
           loadWidgetVisible(),
           loadWidgetProviderIds(),
-          loadWidgetMetric(),
-          loadWidgetZoom(),
+          loadWidgetProviderMetrics(),
         ])
         if (cancelled) return
         setPluginSettings(normalizePluginSettings(stored, meta))
@@ -109,11 +103,9 @@ export function useSettingsWindow() {
         setGlobalShortcut(shortcut)
         setStatsShortcut(stats)
         setStartOnLogin(login)
-        setWidgetLayout(layout)
         setWidgetVisible(visible)
         setWidgetProviderIds(providers)
-        setWidgetMetric(metric)
-        setWidgetZoom(zoom)
+        setWidgetProviderMetrics(providerMetrics)
       } catch (error) {
         console.error("Failed to bootstrap settings window:", error)
       }
@@ -123,8 +115,8 @@ export function useSettingsWindow() {
     }
   }, [])
 
-  // Keep Settings live when another window writes the same shared store (widget
-  // double-click, popup reset-timer toggle, plugin nav actions).
+  // Keep Settings live when another window writes the same shared store (popup
+  // reset-timer toggle, plugin nav actions).
   useEffect(() => {
     if (!isTauri()) return
     const store = new LazyStore("settings.json")
@@ -138,12 +130,11 @@ export function useSettingsWindow() {
         if (cancelled) fn()
         else unlisteners.push(fn)
       }
-      await subscribe<WidgetLayout>("widgetLayout", (value) => {
-        if (value === "vertical" || value === "horizontal") setWidgetLayout(value)
-      })
-      await subscribe<number>("widgetZoom", (value) => setWidgetZoom(clampWidgetZoom(value)))
       await subscribe<ResetTimerDisplayMode>("resetTimerDisplayMode", (value) => {
         if (value === "relative" || value === "absolute") setResetTimerDisplayMode(value)
+      })
+      await subscribe<unknown>("widgetProviderMetrics", (value) => {
+        setWidgetProviderMetrics(parseWidgetProviderMetrics(value))
       })
       await subscribe<PluginSettings>("plugins", (value) => {
         setPluginsMeta((meta) => {
@@ -162,13 +153,22 @@ export function useSettingsWindow() {
   // emits widget:visibility on every change.
   useWidgetVisibilitySync(setWidgetVisible)
 
+  // Accounts added/removed/renamed: reload the plugin list shown here.
+  useAccountsChanged(() => {
+    void reloadPluginList()
+      .then(({ meta, settings }) => {
+        setPluginsMeta(meta)
+        setPluginSettings(settings)
+      })
+      .catch((error) => console.error("Failed to reload providers after account change:", error))
+  })
+
   const persistPluginSettings = useCallback((next: PluginSettings) => {
     setPluginSettings(next)
     void savePluginSettings(next).catch((error) => console.error("Failed to save plugins:", error))
-    // Re-probe enabled providers so the popup/tray reflect the change promptly.
     if (isTauri()) {
-      void invoke("start_probe_batch", { pluginIds: getEnabledPluginIds(next) }).catch((error) =>
-        console.error("Failed to start probe batch:", error)
+      void emit(SETTINGS_PLUGINS_CHANGED_EVENT, next).catch((error) =>
+        console.error("Failed to notify plugin settings change:", error)
       )
     }
   }, [])
@@ -182,8 +182,8 @@ export function useSettingsWindow() {
       const next = { ...current, disabled }
       void savePluginSettings(next).catch((error) => console.error("Failed to save plugins:", error))
       if (isTauri()) {
-        void invoke("start_probe_batch", { pluginIds: getEnabledPluginIds(next) }).catch((error) =>
-          console.error("Failed to start probe batch:", error)
+        void emit(SETTINGS_PLUGINS_CHANGED_EVENT, next).catch((error) =>
+          console.error("Failed to notify plugin settings change:", error)
         )
       }
       return next
@@ -202,6 +202,11 @@ export function useSettingsWindow() {
   const handleAutoUpdateIntervalChange = useCallback((value: AutoUpdateIntervalMinutes) => {
     setAutoUpdateInterval(value)
     void saveAutoUpdateInterval(value).catch((error) => console.error("Failed to save interval:", error))
+    if (isTauri()) {
+      void emit(SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT, value).catch((error) =>
+        console.error("Failed to notify auto-update interval change:", error)
+      )
+    }
   }, [])
 
   const handleThemeModeChange = useCallback((value: ThemeMode) => {
@@ -249,11 +254,6 @@ export function useSettingsWindow() {
     })()
   }, [])
 
-  const handleWidgetLayoutChange = useCallback((value: WidgetLayout) => {
-    setWidgetLayout(value)
-    void saveWidgetLayout(value).catch((error) => console.error("Failed to save widget layout:", error))
-  }, [])
-
   const handleWidgetVisibleChange = useCallback((value: boolean) => {
     setWidgetVisible(value)
     if (!isTauri()) return
@@ -267,15 +267,11 @@ export function useSettingsWindow() {
     void saveWidgetProviderIds(value).catch((error) => console.error("Failed to save widget providers:", error))
   }, [])
 
-  const handleWidgetMetricChange = useCallback((value: WidgetMetric) => {
-    setWidgetMetric(value)
-    void saveWidgetMetric(value).catch((error) => console.error("Failed to save widget metric:", error))
-  }, [])
-
-  const handleWidgetZoomChange = useCallback((value: number) => {
-    const clamped = clampWidgetZoom(value)
-    setWidgetZoom(clamped)
-    void saveWidgetZoom(clamped).catch((error) => console.error("Failed to save widget zoom:", error))
+  const handleWidgetProviderMetricsChange = useCallback((value: WidgetProviderMetrics) => {
+    setWidgetProviderMetrics(value)
+    void saveWidgetProviderMetrics(value).catch((error) =>
+      console.error("Failed to save widget provider metrics:", error)
+    )
   }, [])
 
   const plugins = useMemo(() => {
@@ -289,14 +285,9 @@ export function useSettingsWindow() {
     }))
   }, [pluginSettings, pluginsMeta])
 
-  const availableMetrics = useMemo(() => {
-    if (!pluginSettings) return []
-    return getAvailableWidgetMetrics(pluginsMeta, getEnabledPluginIds(pluginSettings))
-  }, [pluginsMeta, pluginSettings])
-
   return {
     plugins,
-    availableMetrics,
+    pluginsMeta,
     ready: pluginSettings !== null,
     autoUpdateInterval,
     themeMode,
@@ -304,11 +295,9 @@ export function useSettingsWindow() {
     globalShortcut,
     statsShortcut,
     startOnLogin,
-    widgetLayout,
     widgetVisible,
     widgetProviderIds,
-    widgetMetric,
-    widgetZoom,
+    widgetProviderMetrics,
     handleToggle,
     handleReorder,
     handleAutoUpdateIntervalChange,
@@ -317,10 +306,8 @@ export function useSettingsWindow() {
     handleGlobalShortcutChange,
     handleStatsShortcutChange,
     handleStartOnLoginChange,
-    handleWidgetLayoutChange,
     handleWidgetVisibleChange,
     handleWidgetProviderIdsChange,
-    handleWidgetMetricChange,
-    handleWidgetZoomChange,
+    handleWidgetProviderMetricsChange,
   }
 }

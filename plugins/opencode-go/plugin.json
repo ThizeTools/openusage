@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "opencode-go",
-  "name": "OpenCode Go",
+  "name": "OpenCode",
   "version": "0.0.1",
   "entry": "plugin.js",
   "icon": "icon.svg",
@@ -16,6 +16,16 @@
       "url": "https://opencode.ai/docs/go/"
     }
   ],
+  "auth": {
+    "kind": "device",
+    "deviceUrl": "https://opencode.ai/console/auth/device/code",
+    "tokenUrl": "https://opencode.ai/console/auth/device/token",
+    "clientId": "opencode-cli",
+    "encoding": "form",
+    "deviceParams": {
+      "supports_org_scope": "true"
+    }
+  },
   "lines": [
     {
       "type": "progress",
@@ -26,7 +36,8 @@
     {
       "type": "progress",
       "label": "Weekly",
-      "scope": "overview"
+      "scope": "overview",
+      "primaryOrder": 2
     },
     {
       "type": "progress",

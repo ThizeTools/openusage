@@ -1,93 +1,49 @@
 # Amp
 
-## Overview
+Tracks Amp agent usage, orb hours, the free daily tier and individual credits.
 
-- **Protocol:** JSON-RPC (`POST /api/internal`)
-- **URL:** `https://ampcode.com/api/internal`
-- **Auth:** API key from Amp CLI (`~/.local/share/amp/secrets.json`)
-- **Tier:** Free (daily replenishing quota) and/or individual credits
+## Sign-in
 
-## Authentication
+- Sign in from **Settings → Accounts** with an Amp device code. The browser opens `https://ampcode.com/auth/cli/device` with the code filled in.
+- Refresh: WorkOS rotates the refresh token on each renewal. The access token lasts about 5 minutes, so it is renewed ahead of expiry (its own `exp`, since Amp sends no `expires_in`) and once on 401/403.
+- Account name: the email from "Signed in as ..." in the usage text, or the `user.email` of the token response.
 
-### Credential Source
+## API
 
-The plugin reads the API key automatically from `~/.local/share/amp/secrets.json`, created by Amp CLI when you sign in. No manual setup required.
-
-```json
-{
-  "apiKey@https://ampcode.com/": "sgamp_user_..."
-}
-```
-
-The key is sent as `Authorization: Bearer <key>` to the JSON-RPC API.
-
-## Data Source
-
-### API Endpoint
+**Usage:** `POST https://ampcode.com/api/internal?userDisplayBalanceInfo`
 
 ```
-POST https://ampcode.com/api/internal
-Authorization: Bearer <api_key>
+Authorization: Bearer <access_token>
 Content-Type: application/json
+Accept: application/json
 
-{"method": "userDisplayBalanceInfo", "params": {}}
+{"method":"userDisplayBalanceInfo","params":{}}
 ```
 
-### Response
+The response carries `result.displayText`, the text `amp usage` prints. OpenUsage reads these rows:
 
-The response contains a `displayText` string whose contents vary by user tier:
+- Tier row: `Amp <plan> Tier: agent usage $X of $Y remaining ... orb usage Ah of Bh ... period <start> to <end>`
+- Free row: `Amp Free: $X/$Y remaining` or `Amp Free: N% remaining`
+- Credits row: `Individual credits: $X remaining`
 
-**Free tier + credits:**
-```
-Signed in as <user>
-Amp Free: $<remaining>/$<total> remaining (replenishes +$<rate>/hour) [optional: +N% bonus for N more days] - https://ampcode.com/settings#amp-free
-Individual credits: $<credits> remaining - https://ampcode.com/settings
-```
+Refresh: `POST https://authapi.ampcode.com/user_management/authenticate` (JSON, `client_id`, `grant_type=refresh_token`, `refresh_token`).
 
-**Paid credits only:**
-```
-Signed in as <user>
-Individual credits: $<credits> remaining - https://ampcode.com/settings
-```
+## Displayed lines
 
-The plugin parses the display text with regex to extract:
-- **Balance:** `$remaining/$total remaining` → dollar amounts (only if Amp Free enabled)
-- **Rate:** `replenishes +$rate/hour` → replenishment speed (only if Amp Free enabled)
-- **Bonus:** `[+N% bonus for N more days]` → optional promotional bonus 
-- **Credits:** `Individual credits: $N remaining` → paid credits balance
+| Line | Scope | Description |
+|------|-------|-------------|
+| Agent Usage | overview (primary 1) | Dollars used of the tier allowance; resets at period end. |
+| Amp Free | overview (primary 2) | Free daily quota used, percent; 24-hour period. |
+| Orb Hours | detail | Orb hours used of the tier allowance. |
+| Credits | overview | Individual credits left, in dollars. |
 
-### Usage Calculation (Free tier only)
-
-- **Used:** `total - remaining` (clamped to 0 minimum)
-- **Reset time:** `used / hourlyRate` hours from now (null if nothing used or rate is zero)
-- **Period:** 24 hours (fixed)
-
-## Plan Detection
-
-| Condition | Plan |
-|-----------|------|
-| Free tier present (with or without credits) | `"Free"` |
-| Credits only (no free tier) | `"Credits"` |
-
-## Displayed Lines
-
-| Line       | Scope    | Condition                   | Description                            |
-|------------|----------|-----------------------------|----------------------------------------|
-| Free       | overview | Amp Free enabled            | Dollar amount consumed as progress bar |
-| Bonus      | detail   | Amp Free + active promotion | Bonus percentage and duration          |
-| Credits    | overview | Credits > $0, or credits-only accounts | Individual credits balance      |
-
-Progress line includes:
-- `resetsAt` — ISO timestamp of estimated full replenishment (null if nothing used or rate is zero)
-- `periodDurationMs` — 24 hours for pace tracking
+The plan is the tier name (for example `Megawatt`), or `Free` when only Amp Free shows.
 
 ## Errors
 
-| Condition              | Message                                                        |
-|------------------------|----------------------------------------------------------------|
-| Amp not installed      | "Amp not installed. Install Amp Code to get started."          |
-| 401/403                | "Session expired. Re-authenticate in Amp Code."               |
-| Non-2xx with detail    | Error message from API response                                |
-| Non-2xx without detail | "Request failed (HTTP {status}). Try again later."             |
-| Unparseable response   | "Could not parse usage data."                                  |
-| Network error          | "Request failed. Check your connection."                       |
+| Condition | Message |
+|-----------|---------|
+| No credentials | "Sign in again in Settings → Accounts." |
+| Refresh token refused, or 401/403 after retry | "Sign in again in Settings → Accounts." |
+| Other HTTP error | "Amp usage request failed (HTTP {status}). Try again later." |
+| Unreadable text | "Amp usage data is unreadable. Try again later." |

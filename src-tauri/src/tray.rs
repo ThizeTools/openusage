@@ -4,11 +4,17 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_store::StoreExt;
 
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use crate::log_path;
-use crate::panel::show_panel;
+use crate::panel::{show_panel, toggle_panel_from_tray};
 
 const LOG_LEVEL_STORE_KEY: &str = "logLevel";
 const TRAY_ID: &str = "tray";
+const TRAY_CLICK_DEBOUNCE_MS: u64 = 250;
+
+static LAST_TRAY_CLICK: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn get_stored_log_level(app_handle: &AppHandle) -> log::LevelFilter {
     let store = match app_handle.store("settings.json") {
@@ -27,7 +33,27 @@ fn get_stored_log_level(app_handle: &AppHandle) -> log::LevelFilter {
     }
 }
 
-fn show_panel_from_tray_event(app_handle: &AppHandle, event: TrayIconEvent) {
+fn is_left_click(button: MouseButton, button_state: MouseButtonState) -> bool {
+    button == MouseButton::Left
+        && matches!(button_state, MouseButtonState::Up | MouseButtonState::Down)
+}
+
+fn should_handle_tray_click() -> bool {
+    let now = Instant::now();
+    let Ok(mut last) = LAST_TRAY_CLICK.lock() else {
+        return true;
+    };
+    if last
+        .map(|t| now.duration_since(t) < Duration::from_millis(TRAY_CLICK_DEBOUNCE_MS))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+fn toggle_panel_from_tray_event(app_handle: &AppHandle, event: TrayIconEvent) {
     let TrayIconEvent::Click {
         button,
         button_state,
@@ -38,12 +64,12 @@ fn show_panel_from_tray_event(app_handle: &AppHandle, event: TrayIconEvent) {
         return;
     };
 
-    if button != MouseButton::Left || button_state != MouseButtonState::Down {
+    if !is_left_click(button, button_state) || !should_handle_tray_click() {
         return;
     }
 
-    log::debug!("tray click: showing main window");
-    show_panel(app_handle);
+    log::debug!("tray click: toggling main window");
+    toggle_panel_from_tray(app_handle);
 }
 
 pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
@@ -112,9 +138,28 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
             }
         })
         .on_tray_icon_event(|tray, event| {
-            show_panel_from_tray_event(tray.app_handle(), event);
+            toggle_panel_from_tray_event(tray.app_handle(), event);
         })
         .build(app_handle)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_left_click, should_handle_tray_click};
+    use tauri::tray::{MouseButton, MouseButtonState};
+
+    #[test]
+    fn accepts_left_click_down_and_up() {
+        assert!(is_left_click(MouseButton::Left, MouseButtonState::Up));
+        assert!(is_left_click(MouseButton::Left, MouseButtonState::Down));
+        assert!(!is_left_click(MouseButton::Right, MouseButtonState::Up));
+    }
+
+    #[test]
+    fn debounces_rapid_tray_clicks() {
+        assert!(should_handle_tray_click());
+        assert!(!should_handle_tray_click());
+    }
 }

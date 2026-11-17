@@ -1,297 +1,240 @@
 (function () {
-  const AUTH_PATH = "~/.grok/auth.json"
-  const BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing"
+  const CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+  const TOKEN_URL = "https://auth.x.ai/oauth2/token"
+  const CREDITS_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
   const SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
-  const REFRESH_URL = "https://auth.x.ai/oauth2/token"
-  const DEFAULT_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
   const TOKEN_AUTH_HEADER = "xai-grok-cli"
-  const AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
-  const LOGIN_HINT = "Grok auth expired. Run `grok login` again."
+  const WEEKLY_PERIOD = "USAGE_PERIOD_TYPE_WEEKLY"
+  const REFRESH_MARGIN_MS = 5 * 60 * 1000
+  const REFUSED_CODES = [
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+  ]
+  const SIGN_IN_AGAIN = "Sign in again in Settings → Accounts."
 
-  function readJson(ctx, path) {
-    if (!ctx.host.fs.exists(path)) return null
-    try {
-      return ctx.util.tryParseJson(ctx.host.fs.readText(path))
-    } catch {
-      return null
+  function num(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : null
     }
-  }
-
-  function entryExpiresAtMs(ctx, entry) {
-    if (!entry || typeof entry !== "object") return null
-    if (entry.expires_at) return ctx.util.parseDateMs(entry.expires_at)
-    if (entry.expires) return ctx.util.parseDateMs(entry.expires)
     return null
   }
 
-  function tokenExpiresAtMs(ctx, token) {
-    const payload = ctx.jwt.decodePayload(token)
-    if (!payload || typeof payload.exp !== "number") return null
-    return payload.exp * 1000
-  }
-
-  function needsRefresh(ctx, entry, token, nowMs) {
-    const entryMs = entryExpiresAtMs(ctx, entry)
-    const tokenMs = tokenExpiresAtMs(ctx, token)
-    const entryNeedsRefresh = entryMs !== null && ctx.util.needsRefreshByExpiry({
-      nowMs,
-      expiresAtMs: entryMs,
-      bufferMs: AUTH_REFRESH_BUFFER_MS,
-    })
-    const tokenNeedsRefresh = tokenMs !== null && ctx.util.needsRefreshByExpiry({
-      nowMs,
-      expiresAtMs: tokenMs,
-      bufferMs: AUTH_REFRESH_BUFFER_MS,
-    })
-    return entryNeedsRefresh || tokenNeedsRefresh
-  }
-
-  function isExpired(ctx, entry, token, nowMs) {
-    const entryMs = entryExpiresAtMs(ctx, entry)
-    const tokenMs = tokenExpiresAtMs(ctx, token)
-    const expiresAtMs = tokenMs !== null ? tokenMs : entryMs
-    if (expiresAtMs === null) return false
-    return nowMs >= expiresAtMs
-  }
-
-  function readRefreshToken(entry) {
-    if (!entry || typeof entry !== "object") return ""
-    const refreshToken = typeof entry.refresh_token === "string" ? entry.refresh_token.trim() : ""
-    if (refreshToken) return refreshToken
-    return typeof entry.refresh === "string" ? entry.refresh.trim() : ""
-  }
-
-  function readClientId(entryKey, entry) {
-    if (entry && typeof entry.oidc_client_id === "string" && entry.oidc_client_id.trim()) {
-      return entry.oidc_client_id.trim()
-    }
-    const parts = String(entryKey || "").split("::")
-    const fromKey = parts.length > 1 ? parts[parts.length - 1].trim() : ""
-    return fromKey || DEFAULT_CLIENT_ID
-  }
-
-  function nowMs(ctx) {
-    return ctx.util.parseDateMs(ctx.nowIso) || Date.now()
-  }
-
-  function refreshAuth(ctx, auth, entryKey, entry) {
-    const refreshToken = readRefreshToken(entry)
-    if (!refreshToken) {
-      ctx.host.log.warn("refresh skipped: no refresh token")
-      return null
-    }
-
-    ctx.host.log.info("attempting Grok auth refresh")
-    try {
-      const resp = ctx.util.request({
-        method: "POST",
-        url: REFRESH_URL,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        bodyText:
-          "grant_type=refresh_token" +
-          "&client_id=" + encodeURIComponent(readClientId(entryKey, entry)) +
-          "&refresh_token=" + encodeURIComponent(refreshToken),
-        timeoutMs: 15000,
-      })
-
-      if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
-        const body = ctx.util.tryParseJson(resp.bodyText)
-        const code = body && ((body.error && body.error.code) || body.error || body.code)
-        ctx.host.log.error("Grok auth refresh failed: status=" + resp.status + " code=" + String(code))
-        return null
-      }
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("Grok auth refresh returned status: " + resp.status)
-        return null
-      }
-
-      const body = ctx.util.tryParseJson(resp.bodyText)
-      if (!body || typeof body.access_token !== "string" || !body.access_token.trim()) {
-        ctx.host.log.warn("Grok auth refresh response missing access_token")
-        return null
-      }
-
-      const accessToken = body.access_token.trim()
-      entry.key = accessToken
-      if (typeof body.refresh_token === "string" && body.refresh_token.trim()) {
-        entry.refresh_token = body.refresh_token.trim()
-      }
-      if (typeof body.id_token === "string" && body.id_token.trim()) {
-        entry.id_token = body.id_token.trim()
-      }
-
-      const refreshedAtMs = nowMs(ctx)
-      const expiresIn = Number(body.expires_in)
-      const tokenExpiryMs = tokenExpiresAtMs(ctx, accessToken)
-      const expiresAtMs = Number.isFinite(expiresIn) && expiresIn > 0
-        ? refreshedAtMs + expiresIn * 1000
-        : tokenExpiryMs || refreshedAtMs + 3600 * 1000
-      entry.expires_at = new Date(expiresAtMs).toISOString()
-
-      try {
-        ctx.host.fs.writeText(AUTH_PATH, JSON.stringify(auth, null, 2))
-        ctx.host.log.info("Grok auth refresh succeeded, token persisted")
-      } catch (e) {
-        ctx.host.log.warn("Grok auth refresh succeeded but failed to save auth: " + String(e))
-      }
-
-      return accessToken
-    } catch (e) {
-      if (typeof e === "string") throw e
-      ctx.host.log.error("Grok auth refresh exception: " + String(e))
-      return null
-    }
-  }
-
-  function loadAuth(ctx) {
-    const auth = readJson(ctx, AUTH_PATH)
-    if (!auth || typeof auth !== "object") {
-      throw "Grok not logged in. Run `grok login`."
-    }
-
-    const currentMs = nowMs(ctx)
-    let expiredCandidate = false
-    const keys = Object.keys(auth)
-    for (let i = 0; i < keys.length; i++) {
-      const entryKey = keys[i]
-      const entry = auth[entryKey]
-      if (!entry || typeof entry !== "object") continue
-      const token = typeof entry.key === "string" ? entry.key.trim() : ""
-      if (!token) continue
-      if (needsRefresh(ctx, entry, token, currentMs)) {
-        const refreshed = refreshAuth(ctx, auth, entryKey, entry)
-        if (refreshed) return { auth, entryKey, entry, token: refreshed }
-        if (!isExpired(ctx, entry, token, currentMs)) {
-          ctx.host.log.warn("Grok refresh failed, trying existing access token")
-          return { auth, entryKey, entry, token }
-        }
-        expiredCandidate = true
-        continue
-      }
-      return { auth, entryKey, entry, token }
-    }
-
-    if (expiredCandidate) {
-      throw LOGIN_HINT
-    }
-    throw "Grok auth invalid. Run `grok login` again."
-  }
-
-  function unitsValue(obj) {
-    if (!obj || typeof obj !== "object") return null
-    const n = Number(obj.val)
-    return Number.isFinite(n) ? n : null
-  }
-
   function clampPercent(value) {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return 0
-    if (n < 0) return 0
-    if (n > 100) return 100
-    return n
+    return Math.min(100, Math.max(0, value))
   }
 
-  function fetchBillingResponse(ctx, token) {
-    try {
-      return ctx.util.request({
-        method: "GET",
-        url: BILLING_URL,
-        headers: {
-          Authorization: "Bearer " + token,
-          "X-XAI-Token-Auth": TOKEN_AUTH_HEADER,
-          Accept: "application/json",
-          "User-Agent": "OpenUsage",
-        },
-        timeoutMs: 10000,
-      })
-    } catch {
-      throw "Grok billing request failed. Check your connection."
-    }
+  function errorCode(json) {
+    if (!json) return null
+    if (typeof json.error === "string") return json.error
+    if (json.error && typeof json.error.code === "string") return json.error.code
+    if (typeof json.code === "string") return json.code
+    return null
   }
 
-  function parseBilling(ctx, resp) {
-    if (ctx.util.isAuthStatus(resp.status)) {
-      throw LOGIN_HINT
+  // Refresh: rotated refresh tokens are saved; a refused refresh token means sign in again.
+  function refreshGrant(ctx, creds) {
+    const resp = ctx.host.http.request({
+      method: "POST",
+      url: TOKEN_URL,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      bodyText:
+        "grant_type=refresh_token" +
+        "&client_id=" + encodeURIComponent(CLIENT_ID) +
+        "&refresh_token=" + encodeURIComponent(creds.refresh_token),
+      timeoutMs: 15000,
+    })
+    const json = ctx.util.tryParseJson(resp.bodyText)
+    if (
+      [400, 401, 403].indexOf(resp.status) !== -1 &&
+      REFUSED_CODES.indexOf(errorCode(json)) !== -1
+    ) {
+      ctx.host.log.warn("Grok sign-in renewal refused: " + errorCode(json))
+      throw SIGN_IN_AGAIN
     }
     if (resp.status < 200 || resp.status >= 300) {
-      throw "Grok billing request failed (HTTP " + String(resp.status) + "). Try again later."
+      throw "Grok sign-in renewal failed (HTTP " + resp.status + "). Try again later."
     }
-
-    const data = ctx.util.tryParseJson(resp.bodyText)
-    if (!data) {
-      throw "Grok billing response changed."
+    if (!json || typeof json.access_token !== "string" || !json.access_token) {
+      throw "Grok sign-in renewal returned an invalid response."
     }
-    return data
+    return json
   }
 
-  function fetchPlanName(ctx, token) {
+  function renew(ctx, creds) {
+    const nowMs = Date.now()
+    const json = refreshGrant(ctx, creds)
+    const next = Object.assign({}, creds, json)
+    const expiresIn = num(json.expires_in)
+    if (expiresIn !== null) {
+      next.expiresAt = nowMs + expiresIn * 1000
+    } else {
+      delete next.expiresAt
+    }
+    next.obtainedAt = nowMs
+    if (!ctx.account.saveCredentials(JSON.stringify(next))) {
+      ctx.host.log.error("Grok renewed sign-in could not be saved; it may need sign in again")
+    }
+    return next
+  }
+
+  function needsRenewal(creds, nowMs) {
+    if (!creds.refresh_token || typeof creds.expiresAt !== "number") return false
+    return nowMs + REFRESH_MARGIN_MS >= creds.expiresAt
+  }
+
+  // Renews ahead of expiry. A failed early renewal keeps the still-valid token, as the app does.
+  function freshCreds(ctx, creds) {
+    if (!needsRenewal(creds, Date.now())) return creds
     try {
-      const resp = ctx.util.request({
-        method: "GET",
-        url: SETTINGS_URL,
-        headers: {
-          Authorization: "Bearer " + token,
-          "X-XAI-Token-Auth": TOKEN_AUTH_HEADER,
-          Accept: "application/json",
-          "User-Agent": "OpenUsage",
-        },
-        timeoutMs: 10000,
-      })
-      if (resp.status < 200 || resp.status >= 300) return null
-      const data = ctx.util.tryParseJson(resp.bodyText)
-      const plan = data && data.subscription_tier_display
-      return typeof plan === "string" && plan.trim() ? plan.trim() : null
-    } catch {
-      return null
+      return renew(ctx, creds)
+    } catch (e) {
+      if (creds.expiresAt > Date.now()) {
+        ctx.host.log.warn("early token renewal failed; keeping the current token: " + String(e))
+        return creds
+      }
+      throw e
     }
   }
 
-  function probe(ctx) {
-    const auth = loadAuth(ctx)
-    const billingResp = ctx.util.retryOnceOnAuth({
-      request: (token) => fetchBillingResponse(ctx, token || auth.token),
-      refresh: () => {
-        const refreshed = refreshAuth(ctx, auth.auth, auth.entryKey, auth.entry)
-        if (refreshed) auth.token = refreshed
-        return refreshed
+  function get(ctx, url, token) {
+    return ctx.host.http.request({
+      method: "GET",
+      url: url,
+      headers: {
+        Authorization: "Bearer " + token.trim(),
+        "X-XAI-Token-Auth": TOKEN_AUTH_HEADER,
+        Accept: "application/json",
+        "User-Agent": "OpenUsage",
       },
+      timeoutMs: 10000,
     })
-    const data = parseBilling(ctx, billingResp)
-    const config = data && data.config
-    if (!config || typeof config !== "object") {
-      throw "Grok billing response changed."
-    }
-
-    const usedUnits = unitsValue(config.used)
-    const limitUnits = unitsValue(config.monthlyLimit)
-    const onDemandCapUnits = unitsValue(config.onDemandCap)
-    if (usedUnits === null || limitUnits === null || limitUnits <= 0 || onDemandCapUnits === null) {
-      throw "Grok billing response changed."
-    }
-
-    const resetsAt = ctx.util.toIso(config.billingPeriodEnd)
-    if (!resetsAt) {
-      throw "Grok billing response changed."
-    }
-
-    const usedPercent = clampPercent((usedUnits / limitUnits) * 100)
-    const lines = [
-      ctx.line.progress({
-        label: "Credits used",
-        used: usedPercent,
-        limit: 100,
-        format: { kind: "percent" },
-        resetsAt,
-      }),
-      ctx.line.badge({
-        label: "Pay as you go",
-        text: onDemandCapUnits > 0 ? String(onDemandCapUnits) + " cap" : "Disabled",
-        color: onDemandCapUnits > 0 ? "#22c55e" : "#a3a3a3",
-      }),
-    ]
-
-    return { plan: fetchPlanName(ctx, auth.token), lines }
   }
 
-  globalThis.__openusage_plugin = { id: "grok", probe }
+  function decodeCreditsConfig(body) {
+    const config = body && body.config
+    const period = config && config.currentPeriod
+    if (!period || typeof period.type !== "string" || !period.type.trim()) return null
+    if (typeof period.start !== "string" || typeof period.end !== "string") return null
+    const start = Date.parse(period.start)
+    const end = Date.parse(period.end)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
+
+    // Proto-JSON omits zero values: an absent percent is 0. A present, non-numeric one is a schema change.
+    let percent = 0
+    if (config.creditUsagePercent !== undefined) {
+      percent = num(config.creditUsagePercent)
+      if (percent === null) return null
+    }
+
+    // Cap in cents; absent means no pay-as-you-go cap.
+    let capCents = 0
+    if (config.onDemandCap !== undefined) {
+      const cap = config.onDemandCap
+      if (!cap || typeof cap !== "object" || Array.isArray(cap)) return null
+      const val = cap.val === undefined ? 0 : num(cap.val)
+      if (val === null || !Number.isInteger(val)) return null
+      capCents = val
+    }
+
+    return {
+      type: period.type.trim(),
+      percent: percent,
+      start: start,
+      end: end,
+      capCents: capCents,
+    }
+  }
+
+  function mapCredits(ctx, bodyText) {
+    const config = decodeCreditsConfig(ctx.util.tryParseJson(bodyText))
+    if (!config) throw "Grok usage data is unreadable. Try again later."
+
+    const lines = []
+    if (config.type === WEEKLY_PERIOD) {
+      lines.push(
+        ctx.line.progress({
+          label: "Weekly",
+          used: clampPercent(config.percent),
+          limit: 100,
+          format: { kind: "percent" },
+          resetsAt: new Date(config.end).toISOString(),
+          periodDurationMs: config.end - config.start,
+        })
+      )
+    }
+    if (config.capCents > 0) {
+      lines.push(
+        ctx.line.badge({
+          label: "Extra Usage",
+          text: "Pay as you go",
+          subtitle: "$" + (config.capCents / 100).toFixed(2) + " cap",
+        })
+      )
+    }
+    return lines
+  }
+
+  // The plan name is optional: a failed read leaves it out, as the app does.
+  function readPlan(ctx, token) {
+    try {
+      const resp = get(ctx, SETTINGS_URL, token)
+      if (resp.status < 200 || resp.status >= 300) return undefined
+      const body = ctx.util.tryParseJson(resp.bodyText)
+      const tier = body && body.subscription_tier_display
+      if (typeof tier === "string" && tier.trim()) return tier.trim()
+      return undefined
+    } catch (e) {
+      ctx.host.log.warn("Grok plan read failed: " + String(e))
+      return undefined
+    }
+  }
+
+  globalThis.__openusage_plugin = {
+    id: "grok",
+    probe: function (ctx) {
+      const stored = ctx.account && ctx.account.credentials
+      if (!stored || typeof stored.access_token !== "string" || !stored.access_token) {
+        throw SIGN_IN_AGAIN
+      }
+
+      let creds = freshCreds(ctx, stored)
+      let token = creds.access_token
+      const resp = ctx.util.retryOnceOnAuth({
+        request: (next) => get(ctx, CREDITS_URL, next || token),
+        refresh: () => {
+          if (!creds.refresh_token) return null
+          creds = renew(ctx, creds)
+          token = creds.access_token
+          return token
+        },
+      })
+
+      if (resp.status === 412) {
+        const body = ctx.util.tryParseJson(resp.bodyText)
+        const error = body && typeof body.error === "string" ? body.error : ""
+        if (error.toLowerCase().indexOf("no personal team") !== -1) {
+          return {
+            lines: [ctx.line.text({ label: "Notice", value: "Grok team accounts have no personal quota." })],
+          }
+        }
+      }
+      if (resp.status === 401 || resp.status === 403) throw SIGN_IN_AGAIN
+      if (resp.status < 200 || resp.status >= 300) {
+        throw "Grok usage request failed (HTTP " + resp.status + "). Try again later."
+      }
+
+      const lines = mapCredits(ctx, resp.bodyText)
+
+      const claims = creds.id_token ? ctx.jwt.decodePayload(creds.id_token) : null
+      if (claims && typeof claims.email === "string" && claims.email) {
+        ctx.account.setLabel(claims.email)
+      }
+
+      return { lines: lines, plan: readPlan(ctx, token) }
+    },
+  }
 })()

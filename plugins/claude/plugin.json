@@ -6,6 +6,19 @@
   "entry": "plugin.js",
   "icon": "icon.svg",
   "brandColor": "#DE7356",
+  "auth": {
+    "kind": "oauth-pkce",
+    "authorizeUrl": "https://claude.ai/oauth/authorize",
+    "tokenUrl": "https://platform.claude.com/v1/oauth/token",
+    "clientId": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+    "scopes": "user:profile user:inference",
+    "redirectHost": "localhost",
+    "redirectPort": 0,
+    "redirectPath": "/callback",
+    "authorizeParams": { "code": "true" },
+    "tokenEncoding": "json",
+    "tokenParams": ["grant_type", "client_id", "code", "state", "redirect_uri", "code_verifier"]
+  },
   "links": [
     { "label": "Status", "url": "https://status.anthropic.com/" },
     { "label": "Console", "url": "https://console.anthropic.com/" }
@@ -14,11 +27,7 @@
     { "type": "progress", "label": "Session", "scope": "overview", "primaryOrder": 1 },
     { "type": "progress", "label": "Weekly", "scope": "overview", "primaryOrder": 2 },
     { "type": "progress", "label": "Sonnet", "scope": "detail" },
-    { "type": "progress", "label": "Claude Design", "scope": "detail" },
-    { "type": "progress", "label": "Extra usage spent", "scope": "overview", "primaryOrder": 3 },
-    { "type": "text", "label": "Today", "scope": "detail" },
-    { "type": "text", "label": "Yesterday", "scope": "detail" },
-    { "type": "text", "label": "Last 30 Days", "scope": "detail" },
-    { "type": "barChart", "label": "Usage Trend", "scope": "detail" }
+    { "type": "progress", "label": "Fable", "scope": "detail" },
+    { "type": "progress", "label": "Extra Usage", "scope": "overview", "primaryOrder": 3 }
   ]
 }

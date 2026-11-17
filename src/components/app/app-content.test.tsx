@@ -31,6 +31,7 @@ import { useAppUiStore } from "@/stores/app-ui-store"
 function createProps(): AppContentProps {
   return {
     displayPlugins: [],
+    pluginsReady: true,
     settingsPlugins: [],
     selectedPlugin: {
       meta: {
@@ -52,11 +53,12 @@ function createProps(): AppContentProps {
     onToggle: vi.fn(),
     onAutoUpdateIntervalChange: vi.fn(),
     onThemeModeChange: vi.fn(),
-    onDisplayModeChange: vi.fn(),
     onResetTimerDisplayModeChange: vi.fn(),
     onResetTimerDisplayModeToggle: vi.fn(),
     onGlobalShortcutChange: vi.fn(),
     onStartOnLoginChange: vi.fn(),
+    onWidgetVisibleChange: vi.fn(),
+    onWidgetProviderIdsChange: vi.fn(),
   }
 }
 

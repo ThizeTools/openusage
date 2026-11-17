@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { AppShell } from "@/components/app/app-shell"
+import { useAccountsPluginSync } from "@/hooks/app/use-accounts-plugin-sync"
 import { useAppPluginViews } from "@/hooks/app/use-app-plugin-views"
 import { useProbe } from "@/hooks/app/use-probe"
 import { useSettingsBootstrap } from "@/hooks/app/use-settings-bootstrap"
@@ -10,6 +11,7 @@ import { useSettingsPluginActions } from "@/hooks/app/use-settings-plugin-action
 import { useSettingsPluginList } from "@/hooks/app/use-settings-plugin-list"
 import { useSettingsSystemActions } from "@/hooks/app/use-settings-system-actions"
 import { useSettingsTheme } from "@/hooks/app/use-settings-theme"
+import { useTaskbarWidgetSync } from "@/hooks/app/use-taskbar-widget-sync"
 import { useTrayIcon } from "@/hooks/app/use-tray-icon"
 import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
 import { REFRESH_COOLDOWN_MS, savePluginSettings } from "@/lib/settings"
@@ -56,7 +58,6 @@ function App() {
     setResetTimerDisplayMode,
     setGlobalShortcut,
     setStartOnLogin,
-    setWidgetLayout,
     setWidgetVisible,
     setWidgetProviderIds,
   } = useAppPreferencesStore(
@@ -70,7 +71,6 @@ function App() {
       setResetTimerDisplayMode: state.setResetTimerDisplayMode,
       setGlobalShortcut: state.setGlobalShortcut,
       setStartOnLogin: state.setStartOnLogin,
-      setWidgetLayout: state.setWidgetLayout,
       setWidgetVisible: state.setWidgetVisible,
       setWidgetProviderIds: state.setWidgetProviderIds,
     }))
@@ -108,7 +108,11 @@ function App() {
     }
   }, [scheduleTrayIconUpdate])
 
-  const { applyStartOnLogin } = useSettingsBootstrap({
+  const {
+    applyStartOnLogin,
+    pluginLoadError,
+    retryPluginLoad,
+  } = useSettingsBootstrap({
     setPluginSettings,
     setPluginsMeta,
     setAutoUpdateInterval,
@@ -117,7 +121,6 @@ function App() {
     setResetTimerDisplayMode,
     setGlobalShortcut,
     setStartOnLogin,
-    setWidgetLayout,
     setWidgetVisible,
     setWidgetProviderIds,
     setLoadingForPlugins,
@@ -127,6 +130,7 @@ function App() {
 
   useSettingsTheme(themeMode)
   useWidgetVisibilitySync(setWidgetVisible)
+  useTaskbarWidgetSync()
   useSettingsStoreSync({
     pluginsMeta,
     setPluginSettings,
@@ -134,14 +138,22 @@ function App() {
     setThemeMode,
     setResetTimerDisplayMode,
     setAutoUpdateInterval,
+    setLoadingForPlugins,
+    setErrorForPlugins,
+    startBatch,
     scheduleTrayIconUpdate: scheduleTrayIconUpdate,
+  })
+  useAccountsPluginSync({
+    startBatch,
+    setLoadingForPlugins,
+    setErrorForPlugins,
+    scheduleTrayIconUpdate,
   })
 
   const {
     handleThemeModeChange,
     handleResetTimerDisplayModeChange,
     handleResetTimerDisplayModeToggle,
-    handleWidgetLayoutChange,
     handleWidgetVisibleChange,
     handleWidgetProviderIdsChange,
   } = useSettingsDisplayActions({
@@ -149,7 +161,6 @@ function App() {
     resetTimerDisplayMode,
     setResetTimerDisplayMode,
     setMenubarIconStyle,
-    setWidgetLayout,
     setWidgetVisible,
     setWidgetProviderIds,
     scheduleTrayIconUpdate,
@@ -241,6 +252,9 @@ function App() {
   return (
     <AppShell
       onRefreshAll={handleRefreshAll}
+      pluginsReady={pluginSettings !== null}
+      pluginLoadError={pluginLoadError}
+      onRetryPluginLoad={retryPluginLoad}
       navPlugins={navPlugins}
       displayPlugins={displayPlugins}
       settingsPlugins={settingsPlugins}
@@ -259,7 +273,6 @@ function App() {
         onResetTimerDisplayModeToggle: handleResetTimerDisplayModeToggle,
         onGlobalShortcutChange: handleGlobalShortcutChange,
         onStartOnLoginChange: handleStartOnLoginChange,
-        onWidgetLayoutChange: handleWidgetLayoutChange,
         onWidgetVisibleChange: handleWidgetVisibleChange,
         onWidgetProviderIdsChange: handleWidgetProviderIdsChange,
       }}

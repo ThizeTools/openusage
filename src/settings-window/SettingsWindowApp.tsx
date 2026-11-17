@@ -27,7 +27,7 @@ export function SettingsWindowApp() {
       <div className="flex-1 overflow-y-auto px-4 dark:bg-muted/30">
         <SettingsPage
           plugins={s.plugins}
-          availableMetrics={s.availableMetrics}
+          pluginsMeta={s.pluginsMeta}
           onReorder={s.handleReorder}
           onToggle={s.handleToggle}
           autoUpdateInterval={s.autoUpdateInterval}
@@ -42,16 +42,12 @@ export function SettingsWindowApp() {
           onStatsShortcutChange={s.handleStatsShortcutChange}
           startOnLogin={s.startOnLogin}
           onStartOnLoginChange={s.handleStartOnLoginChange}
-          widgetLayout={s.widgetLayout}
-          onWidgetLayoutChange={s.handleWidgetLayoutChange}
           widgetVisible={s.widgetVisible}
           onWidgetVisibleChange={s.handleWidgetVisibleChange}
           widgetProviderIds={s.widgetProviderIds}
           onWidgetProviderIdsChange={s.handleWidgetProviderIdsChange}
-          widgetMetric={s.widgetMetric}
-          onWidgetMetricChange={s.handleWidgetMetricChange}
-          widgetZoom={s.widgetZoom}
-          onWidgetZoomChange={s.handleWidgetZoomChange}
+          widgetProviderMetrics={s.widgetProviderMetrics}
+          onWidgetProviderMetricsChange={s.handleWidgetProviderMetricsChange}
           activeTab={activeTab}
           onActiveTabChange={setActiveTab}
         />

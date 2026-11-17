@@ -1,119 +1,55 @@
-# Claude Code
+# Claude
 
-> Reverse-engineered, undocumented API. May change without notice.
+> Undocumented API. May change without notice.
 
-## Overview
+## Sign-in
 
-- **Protocol:** REST (plain JSON)
-- **Base URL:** `https://api.anthropic.com`
-- **Auth provider:** `platform.claude.com` (OAuth 2.0)
-- **Client ID:** `9d1c250a-e61b-44d9-88ed-5944d1962f5e`
-- **Beta header required:** `anthropic-beta: oauth-2025-04-20`
-- **Utilization:** integer percentage (0-100)
-- **Credits:** cents (divide by 100 for dollars)
-- **Timestamps:** ISO 8601 (response), unix milliseconds (credentials file)
+Settings → Accounts → Add → Claude. OAuth 2.0 authorization code + PKCE with a loopback redirect (`http://localhost:<any free port>/callback`). The app stores the token response; the plugin never reads Claude Code's files or keychain.
 
-## Endpoints
+- Authorize: `https://claude.ai/oauth/authorize` (extra param `code=true`)
+- Token: `POST https://platform.claude.com/v1/oauth/token`, JSON body
+- Scopes: `user:profile user:inference`
+- Client ID: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`
 
-### GET /api/oauth/usage
+## Refresh
 
-Returns rate limit windows and optional extra credits.
-
-#### Headers
-
-| Header | Required | Value |
-|---|---|---|
-| Authorization | yes | `Bearer <access_token>` |
-| Accept | yes | `application/json` |
-| Content-Type | yes | `application/json` |
-| anthropic-beta | yes | `oauth-2025-04-20` |
-
-#### Response
-
-```jsonc
-{
-  "five_hour": {
-    "utilization": 25,              // % used in 5h rolling window
-    "resets_at": "2026-01-28T15:00:00Z"
-  },
-  "seven_day": {
-    "utilization": 40,              // % used in 7-day window
-    "resets_at": "2026-02-01T00:00:00Z"
-  },
-  "seven_day_opus": {               // separate weekly Opus limit (optional, plan-dependent)
-    "utilization": 0,
-    "resets_at": "2026-02-01T00:00:00Z"
-  },
-  "seven_day_omelette": {           // separate weekly Claude Design limit (optional, plan-dependent)
-    "utilization": 0,
-    "resets_at": "2026-02-01T00:00:00Z"
-  },
-  "extra_usage": {                  // on-demand overage credits (optional)
-    "is_enabled": true,
-    "used_credits": 500,            // cents spent
-    "monthly_limit": 10000,         // cents cap (0 = unlimited)
-    "currency": "USD"
-  }
-}
-```
-
-All windows are enforced simultaneously — hitting any limit throttles the user.
-
-## Authentication
-
-### Token Location
-
-On macOS, OpenUsage reads Claude Code credentials from Keychain first. The default service name is:
-
-```text
-Claude Code-credentials
-```
-
-When `CLAUDE_CONFIG_DIR` is set, Claude Code may use a config-specific service name instead. OpenUsage checks this hashed name before the default service:
-
-```text
-Claude Code-credentials-<sha256(CLAUDE_CONFIG_DIR).slice(0, 8)>
-```
-
-Keychain values use the same JSON structure as the legacy credentials file:
-
-```jsonc
-{
-  "claudeAiOauth": {
-    "accessToken": "<jwt>",          // OAuth access token (Bearer)
-    "refreshToken": "<token>",
-    "expiresAt": 1738300000000,      // unix ms
-    "scopes": ["..."],
-    "subscriptionType": "pro",
-    "rateLimitTier": "..."
-  }
-}
-```
-
-**Fallback:** `~/.claude/.credentials.json`. This file can be left behind by older Claude Code versions, so it is treated as a fallback when Keychain does not contain usable credentials.
-
-### Token Refresh
-
-Access tokens are short-lived JWTs. Refreshed proactively 5 minutes before expiration, or reactively on 401/403.
+Proactive ~5 min before `expiresAt`, and once on 401/403.
 
 ```
 POST https://platform.claude.com/v1/oauth/token
 Content-Type: application/json
+
+{"grant_type":"refresh_token","refresh_token":"…","client_id":"9d1c…","scope":"user:profile user:inference"}
 ```
 
-```json
-{
-  "grant_type": "refresh_token",
-  "refresh_token": "<refresh_token>",
-  "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-  "scope": "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-}
-```
+If Anthropic answers 400 `invalid_scope`, the refresh repeats with `scope: "user:profile"`. The merged response (old fields + new) is saved with `expiresAt` = now + `expires_in`.
 
-```jsonc
-{
-  "access_token": "<new_jwt>",
-  "refresh_token": "<new_refresh_token>",  // may be same as previous
-  "expires_in": 3600                       // seconds
-}
-```
+## Endpoints
+
+### GET https://api.anthropic.com/api/oauth/usage
+
+Headers: `Authorization: Bearer <access_token>`, `Accept: application/json`, `Content-Type: application/json`, `anthropic-beta: oauth-2025-04-20`, `User-Agent: claude-cli/2.1.294 (external, cli)`.
+
+Used: `five_hour`, `seven_day`, `seven_day_sonnet`, `limits[]` (`kind: "weekly_scoped"`, `scope.model.display_name: "Fable"`), `extra_usage` (`is_enabled`, `used_credits` and `monthly_limit` in minor units, `decimal_places`, `currency`).
+
+### GET https://api.anthropic.com/api/oauth/profile
+
+Headers: `Authorization`, `Accept`, `anthropic-beta`. Used for the account label (`account.email`, or `email`) and the plan (`organization.organization_type`, `organization.rate_limit_tier`).
+
+## Metrics
+
+| Line | Source | Notes |
+|---|---|---|
+| Session | `five_hour` | percent, 5h period |
+| Weekly | `seven_day` | percent, 7d period |
+| Sonnet | `seven_day_sonnet` | percent, 7d period (detail) |
+| Fable | `limits[]` Fable entry | percent, 7d period (detail) |
+| Extra Usage | `extra_usage` | dollars with progress if `monthly_limit` > 0; text for other currencies |
+
+Plan: `Ultra`, `Max`, or `<Type> <N>x` from the rate-limit tier (Pro, Team, Enterprise, ...).
+
+HTTP 429 shows a `Status` badge "Rate limited, retry in ~Nm".
+
+## Not included
+
+Rate-limit reset grants and claiming, and the Claude Design line (`seven_day_omelette`) are not ported.

@@ -22,10 +22,6 @@ vi.mock("@/App", () => ({
   App: () => <div>App</div>,
 }))
 
-vi.mock("@/widget/WidgetApp", () => ({
-  WidgetApp: () => <div>Widget</div>,
-}))
-
 describe("main", () => {
   it("mounts app", async () => {
     document.body.innerHTML = '<div id="root"></div>'

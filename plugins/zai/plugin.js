@@ -1,48 +1,48 @@
 (function () {
-  const BASE_URL = "https://api.z.ai"
-  const SUBSCRIPTION_URL = BASE_URL + "/api/biz/subscription/list"
-  const QUOTA_URL = BASE_URL + "/api/monitor/usage/quota/limit"
-  const PERIOD_MS = 5 * 60 * 60 * 1000
-  const WEEK_MS = 7 * 24 * 60 * 60 * 1000
-  const MONTH_MS = 30 * 24 * 60 * 60 * 1000
+  const PROVIDER_ID = "zai"
+  const SUBSCRIPTION_URL = "https://api.z.ai/api/biz/subscription/list"
+  const QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
+  const SIGN_IN_AGAIN = "Sign in again in Settings → Accounts."
+  const HOUR_MS = 60 * 60 * 1000
+  const DAY_MS = 24 * HOUR_MS
+  const WEEK_MS = 7 * DAY_MS
+  const MONTH_MS = 30 * DAY_MS
 
-  function loadApiKey(ctx) {
-    const zai = ctx.host.env.get("ZAI_API_KEY")
-    if (typeof zai === "string" && zai.trim()) return zai.trim()
-
-    const glm = ctx.host.env.get("GLM_API_KEY")
-    if (typeof glm === "string" && glm.trim()) return glm.trim()
-
+  function numberOf(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : null
+    }
     return null
   }
 
-  function fetchSubscription(ctx, apiKey) {
-    try {
-      const resp = ctx.util.request({
-        method: "GET",
-        url: SUBSCRIPTION_URL,
-        headers: {
-          Authorization: "Bearer " + apiKey,
-          Accept: "application/json",
-        },
-        timeoutMs: 10000,
-      })
-      if (resp.status < 200 || resp.status >= 300) {
-        ctx.host.log.warn("subscription request failed: HTTP " + resp.status)
-        return null
-      }
-      const data = ctx.util.tryParseJson(resp.bodyText)
-      if (!data) return null
-      const list = data.data
-      if (!Array.isArray(list) || list.length === 0) return null
-      return {
-        productName: list[0].productName || null,
-        nextRenewTime: list[0].nextRenewTime || null,
-      }
-    } catch (e) {
-      ctx.host.log.warn("subscription request exception: " + String(e))
-      return null
+  function clampPercent(value) {
+    return Math.min(Math.max(value, 0), 100)
+  }
+
+  function isoFromMs(ms) {
+    if (ms === null) return null
+    const d = new Date(ms)
+    return Number.isFinite(d.getTime()) ? d.toISOString() : null
+  }
+
+  function unitMs(unit) {
+    switch (unit) {
+      case 3: return HOUR_MS
+      case 4: return DAY_MS
+      case 5: return MONTH_MS
+      case 6: return WEEK_MS
+      default: return null
     }
+  }
+
+  function readApiKey(ctx) {
+    const creds = ctx.account && ctx.account.credentials
+    if (!creds || typeof creds.apiKey !== "string" || !creds.apiKey.trim()) {
+      throw SIGN_IN_AGAIN
+    }
+    return creds.apiKey.trim()
   }
 
   function fetchQuota(ctx, apiKey) {
@@ -51,138 +51,133 @@
       resp = ctx.util.request({
         method: "GET",
         url: QUOTA_URL,
-        headers: {
-          Authorization: "Bearer " + apiKey,
-          Accept: "application/json",
-        },
+        headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
         timeoutMs: 10000,
       })
     } catch (e) {
-      ctx.host.log.error("usage request exception: " + String(e))
+      ctx.host.log.error("usage request failed: " + String(e))
       throw "Usage request failed. Check your connection."
     }
-
-    if (ctx.util.isAuthStatus(resp.status)) {
-      throw "API key invalid. Check your Z.ai API key."
-    }
-
+    if (ctx.util.isAuthStatus(resp.status)) throw SIGN_IN_AGAIN
     if (resp.status < 200 || resp.status >= 300) {
-      throw "Usage request failed (HTTP " + String(resp.status) + "). Try again later."
+      throw "Usage request failed (HTTP " + resp.status + "). Try again later."
     }
-
-    const data = ctx.util.tryParseJson(resp.bodyText)
-    if (!data) {
-      throw "Usage response invalid. Try again later."
-    }
-
-    return data
+    const body = ctx.util.tryParseJson(resp.bodyText)
+    if (!body || typeof body !== "object") throw "Usage response invalid. Try again later."
+    return body
   }
 
-  function findLimit(limits, type, unit) {
-    let fallback = null
+  // Soft lookup: the plan name. A failure is logged and the plan is left out.
+  function fetchPlan(ctx, apiKey) {
+    try {
+      const resp = ctx.util.request({
+        method: "GET",
+        url: SUBSCRIPTION_URL,
+        headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
+        timeoutMs: 10000,
+      })
+      if (resp.status < 200 || resp.status >= 300) {
+        ctx.host.log.warn("subscription request failed: HTTP " + resp.status)
+        return null
+      }
+      const body = ctx.util.tryParseJson(resp.bodyText)
+      const list = body && Array.isArray(body.data) ? body.data : []
+      const first = list[0]
+      const name = first && typeof first.productName === "string" ? first.productName.trim() : ""
+      return name || null
+    } catch (e) {
+      ctx.host.log.warn("subscription request failed: " + String(e))
+      return null
+    }
+  }
+
+  function classifyWindow(entry) {
+    const unit = numberOf(entry.unit)
+    const count = numberOf(entry.number)
+    if (unit === null || count === null || count <= 0) {
+      throw "Usage response invalid. Try again later."
+    }
+    const base = unitMs(unit)
+    if (base === null) return null
+    const periodMs = base * count
+    return { label: periodMs < DAY_MS ? "Session" : "Weekly", periodMs: periodMs }
+  }
+
+  function percentLine(ctx, entry, label, periodMs) {
+    const raw = numberOf(entry.percentage)
+    if (raw === null) throw "Usage response invalid. Try again later."
+    const resetsAt = isoFromMs(numberOf(entry.nextResetTime))
+    return ctx.line.progress({
+      label: label,
+      used: clampPercent(raw),
+      limit: 100,
+      format: { kind: "percent" },
+      resetsAt: resetsAt,
+      periodDurationMs: periodMs,
+    })
+  }
+
+  function findLimit(limits, type) {
     for (let i = 0; i < limits.length; i++) {
       const item = limits[i]
-      if (item.type === type || item.name === type) {
-        if (unit === undefined) {
-          return item
-        }
-        if (item.unit === unit) {
-          return item
-        }
-        // Store first entry without unit as fallback
-        if (fallback === null && item.unit === undefined) {
-          fallback = item
-        }
+      if (item && (item.type === type || item.name === type)) return item
+    }
+    return null
+  }
+
+  function quotaLines(ctx, body) {
+    if (body.success === false && typeof body.msg === "string" &&
+        body.msg.toLowerCase().indexOf("coding plan") !== -1) {
+      throw "No active GLM Coding Plan. Subscribe at z.ai/subscribe to see usage."
+    }
+    if (body.success === false && body.code === 401) throw SIGN_IN_AGAIN
+
+    const container = body.data !== undefined ? body.data : body
+    if (!container || typeof container !== "object") throw "Usage response invalid. Try again later."
+    const limits = container.limits
+    if (!Array.isArray(limits)) throw "Usage response invalid. Try again later."
+    if (limits.length === 0) return []
+
+    const lines = []
+    for (let i = 0; i < limits.length; i++) {
+      const entry = limits[i]
+      const type = entry && (entry.type || entry.name)
+      if (type !== "TOKENS_LIMIT" && type !== "CREDIT_LIMIT") continue
+      const window = classifyWindow(entry)
+      if (!window) continue
+      lines.push(percentLine(ctx, entry, window.label, window.periodMs))
+    }
+
+    const web = findLimit(limits, "TIME_LIMIT")
+    if (web) {
+      const used = numberOf(web.currentValue)
+      const limit = numberOf(web.usage)
+      if (used === null || limit === null || used < 0 || limit < 0) {
+        throw "Usage response invalid. Try again later."
+      }
+      if (limit === 0) {
+        ctx.host.log.warn("web search limit is 0; Web Searches line skipped")
+      } else {
+        lines.push(ctx.line.progress({
+          label: "Web Searches",
+          used: used,
+          limit: limit,
+          format: { kind: "count", suffix: "searches" },
+          resetsAt: isoFromMs(numberOf(web.nextResetTime)),
+          periodDurationMs: MONTH_MS,
+        }))
       }
     }
-    return fallback
+    return lines
   }
 
   function probe(ctx) {
-    const apiKey = loadApiKey(ctx)
-    if (!apiKey) {
-      throw "No ZAI_API_KEY found. Set up environment variable first."
-    }
-
-    const sub = fetchSubscription(ctx, apiKey)
-    const plan = sub && sub.productName ? ctx.fmt.planLabel(sub.productName) : null
-
-    const quota = fetchQuota(ctx, apiKey)
-    const lines = []
-
-    const container = quota.data || quota
-    const limits = container.limits || container
-    if (!Array.isArray(limits) || limits.length === 0) {
-      lines.push(ctx.line.badge({ label: "Session", text: "No usage data", color: "#a3a3a3" }))
-      return { plan, lines }
-    }
-
-    const tokenLimit = findLimit(limits, "TOKENS_LIMIT", 3)
-
-    if (!tokenLimit) {
-      lines.push(ctx.line.badge({ label: "Session", text: "No usage data", color: "#a3a3a3" }))
-      return { plan, lines }
-    }
-
-    const used = typeof tokenLimit.percentage === "number" ? tokenLimit.percentage : 0
-    const resetsAt = tokenLimit.nextResetTime ? ctx.util.toIso(tokenLimit.nextResetTime) : undefined
-
-    const progressOpts = {
-      label: "Session",
-      used,
-      limit: 100,
-      format: { kind: "percent" },
-      periodDurationMs: PERIOD_MS,
-    }
-    if (resetsAt) {
-      progressOpts.resetsAt = resetsAt
-    }
-    lines.push(ctx.line.progress(progressOpts))
-
-    const weeklyTokenLimit = findLimit(limits, "TOKENS_LIMIT", 6)
-    if (weeklyTokenLimit) {
-      const weeklyUsed = Number.isFinite(weeklyTokenLimit.percentage) ? weeklyTokenLimit.percentage : 0
-      const weeklyResetsAt = weeklyTokenLimit.nextResetTime ? ctx.util.toIso(weeklyTokenLimit.nextResetTime) : undefined
-
-      const weeklyOpts = {
-        label: "Weekly",
-        used: weeklyUsed,
-        limit: 100,
-        format: { kind: "percent" },
-        periodDurationMs: WEEK_MS,
-      }
-      if (weeklyResetsAt) {
-        weeklyOpts.resetsAt = weeklyResetsAt
-      }
-      lines.push(ctx.line.progress(weeklyOpts))
-    }
-
-    const timeLimit = findLimit(limits, "TIME_LIMIT")
-
-    if (timeLimit) {
-      const webUsed = typeof timeLimit.currentValue === "number" ? timeLimit.currentValue : 0
-      const webTotal = typeof timeLimit.usage === "number" ? timeLimit.usage : 0
-      const now = new Date()
-      const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
-      const webResetsAt = timeLimit.nextResetTime
-        ? ctx.util.toIso(timeLimit.nextResetTime)
-        : nextMonth.toISOString()
-
-      const webOpts = {
-        label: "Web Searches",
-        used: webUsed,
-        limit: webTotal,
-        format: { kind: "count", suffix: "/ " + webTotal },
-        periodDurationMs: MONTH_MS,
-      }
-      if (webResetsAt) {
-        webOpts.resetsAt = webResetsAt
-      }
-      lines.push(ctx.line.progress(webOpts))
-    }
-
-    return { plan, lines }
+    const apiKey = readApiKey(ctx)
+    const body = fetchQuota(ctx, apiKey)
+    const lines = quotaLines(ctx, body)
+    const plan = fetchPlan(ctx, apiKey)
+    return plan ? { plan: plan, lines: lines } : { lines: lines }
   }
 
-  globalThis.__openusage_plugin = { id: "zai", probe }
+  globalThis.__openusage_plugin = { id: PROVIDER_ID, probe: probe }
 })()

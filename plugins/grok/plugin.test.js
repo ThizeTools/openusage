@@ -1,66 +1,43 @@
-import { beforeEach, describe, expect, it } from "vitest"
-import { makeCtx } from "../test-helpers.js"
-
-const AUTH_PATH = "~/.grok/auth.json"
-const BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing"
-const SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
-const REFRESH_URL = "https://auth.x.ai/oauth2/token"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { makeAccount, makeCtx } from "../test-helpers.js"
 
 const loadPlugin = async () => {
-  await import("./plugin.js?test=" + Math.random())
+  delete globalThis.__openusage_plugin
+  vi.resetModules()
+  await import("./plugin.js")
   return globalThis.__openusage_plugin
 }
 
-function writeAuth(ctx, entry) {
-  const auth = {}
-  auth["https://auth.x.ai::client"] = entry || {
-    key: "test-token",
-    email: "user@example.com",
-    expires_at: "2026-06-01T00:00:00Z",
-  }
-  ctx.host.fs.writeText(AUTH_PATH, JSON.stringify(auth))
-}
+const CREDITS_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+const SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
+const TOKEN_URL = "https://auth.x.ai/oauth2/token"
 
-function billingData(overrides) {
-  const config = Object.assign({
-    monthlyLimit: { val: 60000 },
-    used: { val: 4277 },
-    onDemandCap: { val: 0 },
-    billingPeriodStart: "2026-05-01T00:00:00+00:00",
-    billingPeriodEnd: "2026-06-01T00:00:00+00:00",
-    history: [
-      {
-        billingCycle: { year: 2026, month: 4 },
-        includedUsed: { val: 1234 },
-        onDemandUsed: { val: 200 },
-        totalUsed: { val: 1434 },
-      },
-      {
-        billingCycle: { year: 2026, month: 3 },
-        includedUsed: { val: 0 },
-        onDemandUsed: { val: 0 },
-        totalUsed: { val: 0 },
-      },
-    ],
-  }, overrides || {})
-  return { config }
-}
+const jwt = (payload) =>
+  "eyJhbGciOiJSUzI1NiJ9." +
+  Buffer.from(JSON.stringify(payload)).toString("base64url") +
+  ".signature"
 
-function mockGrokApi(ctx, data, settings) {
-  ctx.host.http.request.mockImplementation((req) => {
-    if (req.url === BILLING_URL) {
-      return {
-        status: 200,
-        bodyText: JSON.stringify(data || billingData()),
-      }
-    }
-    if (req.url === SETTINGS_URL) {
-      return settings || {
-        status: 200,
-        bodyText: JSON.stringify({ subscription_tier_display: "SuperGrok Heavy" }),
-      }
-    }
-    return { status: 404, bodyText: "" }
+const creditsBody = (overrides = {}) => ({
+  config: {
+    currentPeriod: {
+      type: "USAGE_PERIOD_TYPE_WEEKLY",
+      start: "2026-11-10T00:00:00Z",
+      end: "2026-11-17T00:00:00Z",
+    },
+    creditUsagePercent: 25,
+    onDemandCap: { val: 2000 },
+    ...overrides,
+  },
+})
+
+const json = (status, body) => ({ status, headers: {}, bodyText: JSON.stringify(body) })
+
+function mockGrok(ctx, { credits, token, settings = json(200, { subscription_tier_display: "SuperGrok" }) }) {
+  ctx.host.http.request.mockImplementation((opts) => {
+    if (opts.url === CREDITS_URL) return typeof credits === "function" ? credits(opts) : credits
+    if (opts.url === SETTINGS_URL) return settings
+    if (opts.url === TOKEN_URL) return token
+    throw new Error("unexpected url " + opts.url)
   })
 }
 
@@ -69,356 +46,115 @@ describe("grok plugin", () => {
     delete globalThis.__openusage_plugin
   })
 
-  it("throws when auth file is missing", async () => {
-    const ctx = makeCtx()
+  it("throws sign-in message when credentials are missing", async () => {
     const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok not logged in. Run `grok login`.")
+    const ctx = makeCtx()
+    ctx.account = makeAccount({})
+
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
+    expect(ctx.host.http.request).not.toHaveBeenCalled()
   })
 
-  it("throws when auth file has no usable token", async () => {
-    const ctx = makeCtx()
-    ctx.host.fs.writeText(AUTH_PATH, JSON.stringify({ account: { email: "user@example.com" } }))
+  it("returns weekly usage, the pay-as-you-go cap, plan and the id_token email", async () => {
     const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok auth invalid. Run `grok login` again.")
-  })
-
-  it("throws when the only token is expired and no refresh token is available", async () => {
     const ctx = makeCtx()
-    writeAuth(ctx, {
-      key: "expired-token",
-      email: "user@example.com",
-      expires_at: "2026-01-01T00:00:00Z",
+    ctx.account = makeAccount({
+      access_token: "at-1",
+      refresh_token: "rt-1",
+      id_token: jwt({ sub: "u1", email: "dev@example.com" }),
+      expiresAt: Date.now() + 60 * 60 * 1000,
     })
-    const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok auth expired. Run `grok login` again.")
-  })
+    mockGrok(ctx, { credits: json(200, creditsBody()) })
 
-  it("refreshes an expired Grok CLI token and persists rotated auth", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx, {
-      key: "expired-token",
-      refresh_token: "refresh-token",
-      email: "user@example.com",
-      oidc_client_id: "client-id",
-      expires_at: "2026-01-01T00:00:00Z",
-    })
-    ctx.host.http.request.mockImplementation((req) => {
-      if (req.url === REFRESH_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify({
-            access_token: "new-token",
-            refresh_token: "new-refresh",
-            expires_in: 3600,
-          }),
-        }
-      }
-      if (req.url === BILLING_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify(billingData()),
-        }
-      }
-      if (req.url === SETTINGS_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify({ subscription_tier_display: "SuperGrok Heavy" }),
-        }
-      }
-      return { status: 404, bodyText: "" }
-    })
-
-    const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    expect(result.plan).toBe("SuperGrok Heavy")
-    expect(ctx.host.http.request.mock.calls[0][0].url).toBe(REFRESH_URL)
-    expect(ctx.host.http.request.mock.calls[0][0].bodyText).toContain("client_id=client-id")
-    expect(ctx.host.http.request.mock.calls[0][0].bodyText).toContain("refresh_token=refresh-token")
-    const billingCall = ctx.host.http.request.mock.calls.find((call) => call[0].url === BILLING_URL)[0]
-    expect(billingCall.headers.Authorization).toBe("Bearer new-token")
-
-    const authWrites = ctx.host.fs.writeText.mock.calls.filter((call) => call[0] === AUTH_PATH)
-    const saved = JSON.parse(authWrites[authWrites.length - 1][1])
-    const entry = saved["https://auth.x.ai::client"]
-    expect(entry.key).toBe("new-token")
-    expect(entry.refresh_token).toBe("new-refresh")
-    expect(entry.expires_at).toBe("2026-02-02T01:00:00.000Z")
-  })
-
-  it("refreshes and retries once when billing returns an auth error", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx, {
-      key: "old-token",
-      refresh_token: "refresh-token",
-      email: "user@example.com",
-      expires_at: "2026-06-01T00:00:00Z",
-    })
-    let billingCalls = 0
-    ctx.host.http.request.mockImplementation((req) => {
-      if (req.url === BILLING_URL) {
-        billingCalls += 1
-        if (billingCalls === 1) return { status: 401, bodyText: "" }
-        return {
-          status: 200,
-          bodyText: JSON.stringify(billingData()),
-        }
-      }
-      if (req.url === REFRESH_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify({
-            access_token: "new-token",
-            refresh_token: "new-refresh",
-            expires_in: 3600,
-          }),
-        }
-      }
-      if (req.url === SETTINGS_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify({ subscription_tier_display: "SuperGrok Heavy" }),
-        }
-      }
-      return { status: 404, bodyText: "" }
-    })
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.plan).toBe("SuperGrok Heavy")
-    const billingAuths = ctx.host.http.request.mock.calls
-      .filter((call) => call[0].url === BILLING_URL)
-      .map((call) => call[0].headers.Authorization)
-    expect(billingAuths).toEqual(["Bearer old-token", "Bearer new-token"])
-    const refreshCall = ctx.host.http.request.mock.calls.find((call) => call[0].url === REFRESH_URL)[0]
-    expect(refreshCall.bodyText).toContain("client_id=client")
-    expect(refreshCall.bodyText).toContain("refresh_token=refresh-token")
-  })
-
-  it("uses a still-valid token when proactive refresh is unauthorized", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx, {
-      key: "old-token",
-      refresh_token: "refresh-token",
-      email: "user@example.com",
-      expires_at: "2026-02-02T00:04:00Z",
-    })
-    ctx.host.http.request.mockImplementation((req) => {
-      if (req.url === REFRESH_URL) {
-        return {
-          status: 401,
-          bodyText: JSON.stringify({ error: "invalid_grant" }),
-        }
-      }
-      if (req.url === BILLING_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify(billingData()),
-        }
-      }
-      if (req.url === SETTINGS_URL) {
-        return {
-          status: 200,
-          bodyText: JSON.stringify({ subscription_tier_display: "SuperGrok Heavy" }),
-        }
-      }
-      return { status: 404, bodyText: "" }
-    })
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.plan).toBe("SuperGrok Heavy")
-    const billingCall = ctx.host.http.request.mock.calls.find((call) => call[0].url === BILLING_URL)[0]
-    expect(billingCall.headers.Authorization).toBe("Bearer old-token")
-  })
-
-  it("uses the first non-expired token", async () => {
-    const ctx = makeCtx()
-    ctx.host.fs.writeText(AUTH_PATH, JSON.stringify({
-      expired: {
-        key: "expired-token",
-        expires_at: "2026-01-01T00:00:00Z",
+    expect(result.plan).toBe("SuperGrok")
+    expect(result.lines).toEqual([
+      {
+        type: "progress",
+        label: "Weekly",
+        used: 25,
+        limit: 100,
+        format: { kind: "percent" },
+        resetsAt: "2026-11-17T00:00:00.000Z",
+        periodDurationMs: 7 * 24 * 60 * 60 * 1000,
       },
-      active: {
-        key: "active-token",
-        email: "active@example.com",
-        expires_at: "2026-06-01T00:00:00Z",
+      {
+        type: "badge",
+        label: "Extra Usage",
+        text: "Pay as you go",
+        subtitle: "$20.00 cap",
       },
-    }))
-    mockGrokApi(ctx)
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.plan).toBe("SuperGrok Heavy")
-    expect(ctx.host.http.request.mock.calls[0][0].headers.Authorization).toBe("Bearer active-token")
+    ])
+    const creditsCall = ctx.host.http.request.mock.calls.find((c) => c[0].url === CREDITS_URL)[0]
+    expect(creditsCall.headers.Authorization).toBe("Bearer at-1")
+    expect(creditsCall.headers["X-XAI-Token-Auth"]).toBe("xai-grok-cli")
+    expect(ctx.account.setLabel).toHaveBeenCalledWith("dev@example.com")
+    expect(ctx.account.saveCredentials).not.toHaveBeenCalled()
   })
 
-  it("requests the CLI billing endpoint with Grok CLI headers", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx)
-
+  it("renews an expiring token and saves the rotated refresh token", async () => {
     const plugin = await loadPlugin()
+    const ctx = makeCtx()
+    ctx.account = makeAccount({
+      access_token: "at-old",
+      refresh_token: "rt-old",
+      expiresAt: Date.now() + 60 * 1000,
+      id_token: "x",
+    })
+    mockGrok(ctx, {
+      token: json(200, { access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 }),
+      credits: (opts) =>
+        opts.headers.Authorization === "Bearer at-new" ? json(200, creditsBody()) : json(401, {}),
+    })
+
+    const before = Date.now()
     plugin.probe(ctx)
 
-    const call = ctx.host.http.request.mock.calls[0][0]
-    expect(call.method).toBe("GET")
-    expect(call.url).toBe(BILLING_URL)
-    expect(call.headers.Authorization).toBe("Bearer test-token")
-    expect(call.headers["X-XAI-Token-Auth"]).toBe("xai-grok-cli")
-    expect(call.headers.Accept).toBe("application/json")
+    const tokenCall = ctx.host.http.request.mock.calls.find((c) => c[0].url === TOKEN_URL)[0]
+    expect(tokenCall.bodyText).toContain("grant_type=refresh_token")
+    expect(tokenCall.bodyText).toContain("refresh_token=rt-old")
+    expect(ctx.account.saved.access_token).toBe("at-new")
+    expect(ctx.account.saved.refresh_token).toBe("rt-new")
+    expect(ctx.account.saved.expiresAt).toBeGreaterThanOrEqual(before + 3600 * 1000)
+    expect(ctx.account.saved.expiresAt).toBeLessThanOrEqual(Date.now() + 3600 * 1000)
   })
 
-  it("renders credits used as percent progress", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx)
-
+  it("renews once on 401 and retries the usage read", async () => {
     const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-    const line = result.lines.find((l) => l.label === "Credits used")
-
-    expect(line.type).toBe("progress")
-    expect(line.used).toBeCloseTo(7.128, 3)
-    expect(line.limit).toBe(100)
-    expect(line.format).toEqual({ kind: "percent" })
-    expect(line.resetsAt).toBe("2026-06-01T00:00:00.000Z")
-  })
-
-  it("does not render duplicate reset or billing detail rows", async () => {
     const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx)
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.lines.find((l) => l.label === "Resets")).toBeUndefined()
-    expect(result.lines.find((l) => l.label === "Current period")).toBeUndefined()
-    expect(result.lines.find((l) => l.label === "Billing cycle")).toBeUndefined()
-  })
-
-  it("renders pay as you go disabled when cap is zero", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, billingData({ onDemandCap: { val: 0 } }))
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-    const line = result.lines.find((l) => l.label === "Pay as you go")
-
-    expect(line.type).toBe("badge")
-    expect(line.text).toBe("Disabled")
-    expect(line.color).toBe("#a3a3a3")
-  })
-
-  it("renders pay as you go cap when enabled", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, billingData({ onDemandCap: { val: "2500" } }))
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-    const line = result.lines.find((l) => l.label === "Pay as you go")
-
-    expect(line.text).toBe("2500 cap")
-    expect(line.color).toBe("#22c55e")
-  })
-
-  it("parses billing values provided as strings", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, billingData({
-      monthlyLimit: { val: "10000" },
-      used: { val: "2500" },
-      onDemandCap: { val: "0" },
-    }))
-
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.lines.find((l) => l.label === "Credits used").used).toBe(25)
-    expect(result.lines.find((l) => l.label === "Current period")).toBeUndefined()
-  })
-
-  it("reads the plan name from settings instead of auth email", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, billingData(), {
-      status: 200,
-      bodyText: JSON.stringify({ subscription_tier_display: "SuperGrok Heavy" }),
+    ctx.account = makeAccount({ access_token: "at-old", refresh_token: "rt-old" })
+    mockGrok(ctx, {
+      token: json(200, { access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 }),
+      credits: (opts) =>
+        opts.headers.Authorization === "Bearer at-new" ? json(200, creditsBody()) : json(401, {}),
     })
 
-    const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const settingsCall = ctx.host.http.request.mock.calls.find((call) => call[0].url === SETTINGS_URL)[0]
-    expect(settingsCall.headers.Authorization).toBe("Bearer test-token")
-    expect(settingsCall.headers["X-XAI-Token-Auth"]).toBe("xai-grok-cli")
-    expect(result.plan).toBe("SuperGrok Heavy")
+    expect(result.lines[0].used).toBe(25)
+    expect(ctx.account.saved.access_token).toBe("at-new")
   })
 
-  it("omits the plan label when settings does not include a plan", async () => {
+  it("asks to sign in again when a refused refresh token gets 401", async () => {
+    const plugin = await loadPlugin()
     const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, billingData(), {
-      status: 200,
-      bodyText: JSON.stringify({ release_channel: "stable" }),
+    ctx.account = makeAccount({ access_token: "at-old", refresh_token: "rt-old" })
+    mockGrok(ctx, {
+      token: json(400, { error: "invalid_grant" }),
+      credits: json(401, {}),
     })
 
-    const plugin = await loadPlugin()
-    const result = plugin.probe(ctx)
-
-    expect(result.plan).toBe(null)
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
+    expect(ctx.account.saveCredentials).not.toHaveBeenCalled()
   })
 
-  it("throws when billing request returns auth error", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 401, bodyText: "" })
-
+  it("asks to sign in again when the usage read is 401 without a refresh token", async () => {
     const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok auth expired. Run `grok login` again.")
-  })
-
-  it("throws on billing HTTP error", async () => {
     const ctx = makeCtx()
-    writeAuth(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 500, bodyText: "" })
+    ctx.account = makeAccount({ access_token: "at-old" })
+    mockGrok(ctx, { credits: json(401, {}) })
 
-    const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok billing request failed (HTTP 500). Try again later.")
-  })
-
-  it("throws on billing network error", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    ctx.host.http.request.mockImplementation(() => {
-      throw new Error("offline")
-    })
-
-    const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok billing request failed. Check your connection.")
-  })
-
-  it("throws on invalid billing JSON", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    ctx.host.http.request.mockReturnValue({ status: 200, bodyText: "not-json" })
-
-    const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok billing response changed.")
-  })
-
-  it("throws on unexpected billing response shape", async () => {
-    const ctx = makeCtx()
-    writeAuth(ctx)
-    mockGrokApi(ctx, { config: { used: { val: 1 } } })
-
-    const plugin = await loadPlugin()
-    expect(() => plugin.probe(ctx)).toThrow("Grok billing response changed.")
+    expect(() => plugin.probe(ctx)).toThrow("Sign in again in Settings → Accounts.")
   })
 })

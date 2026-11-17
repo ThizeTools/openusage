@@ -19,6 +19,9 @@ function isWindowsPlatform() {
 
 type AppShellProps = {
   onRefreshAll: () => void
+  pluginsReady: boolean
+  pluginLoadError: string | null
+  onRetryPluginLoad: () => void
   navPlugins: NavPlugin[]
   displayPlugins: DisplayPluginState[]
   settingsPlugins: SettingsPluginState[]
@@ -32,6 +35,9 @@ type AppShellProps = {
 
 export function AppShell({
   onRefreshAll,
+  pluginsReady,
+  pluginLoadError,
+  onRetryPluginLoad,
   navPlugins,
   displayPlugins,
   settingsPlugins,
@@ -105,6 +111,9 @@ export function AppShell({
               <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-none">
                 <AppContent
                   {...appContentProps}
+                  pluginsReady={pluginsReady}
+                  pluginLoadError={pluginLoadError}
+                  onRetryPluginLoad={onRetryPluginLoad}
                   displayPlugins={displayPlugins}
                   settingsPlugins={settingsPlugins}
                   selectedPlugin={selectedPlugin}
