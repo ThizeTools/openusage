@@ -95,6 +95,7 @@ afterEach(() => {
   cleanup()
 })
 
+const openProviders = () => userEvent.click(screen.getByRole("button", { name: /^Providers/ }))
 const openTab = (name: "General" | "Shortcuts" | "Widget" | "Plugins") =>
   userEvent.click(screen.getByRole("tab", { name }))
 
@@ -251,6 +252,7 @@ describe("SettingsPage", () => {
     )
 
     await openTab("Widget")
+    await openProviders()
     await userEvent.click(screen.getByLabelText("Beta"))
     expect(onWidgetProviderIdsChange).toHaveBeenCalledWith(["a", "b"])
   })
@@ -265,7 +267,8 @@ describe("SettingsPage", () => {
   it("shows each enabled provider's metrics in the widget tab", async () => {
     render(<SettingsPage {...defaultProps} widgetProviderIds={["a"]} />)
     await openTab("Widget")
-    expect(screen.getByText("Choose which providers and metrics appear on the taskbar.")).toBeInTheDocument()
+    await openProviders()
+    expect(screen.getByTestId("widget-providers-list")).toBeInTheDocument()
     expect(screen.getByLabelText("Session")).toBeInTheDocument()
     expect(screen.getByLabelText("Extra")).toBeInTheDocument()
   })
@@ -280,6 +283,7 @@ describe("SettingsPage", () => {
       />
     )
     await openTab("Widget")
+    await openProviders()
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).toHaveBeenCalledWith({ a: ["Session", "Weekly", "Sonnet"] })
   })
@@ -294,6 +298,7 @@ describe("SettingsPage", () => {
       />
     )
     await openTab("Widget")
+    await openProviders()
     await userEvent.click(screen.getByLabelText("Extra"))
     expect(onWidgetProviderMetricsChange).not.toHaveBeenCalled()
   })

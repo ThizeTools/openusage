@@ -11,7 +11,12 @@ export function isMacPlatform(): boolean {
   return /Mac/.test(navigatorPlatform())
 }
 
-/** Where the usage widget lives: the menu bar on macOS, the taskbar elsewhere. */
+/** Where the usage widget lives: the taskbar on Windows, the menu bar elsewhere. */
 export function widgetSurfaceName(): "menu bar" | "taskbar" {
-  return isMacPlatform() ? "menu bar" : "taskbar"
+  return isWindowsPlatform() ? "taskbar" : "menu bar"
+}
+
+/** Platforms whose widget is pre-rendered by the frontend (same renderer, same settings): macOS and Windows. */
+export function usesRenderedWidget(): boolean {
+  return isMacPlatform() || isWindowsPlatform()
 }

@@ -5,7 +5,7 @@ import type {
   MenuBarWidgetTextColors,
   MenuBarWidgetToneModes,
 } from "@/lib/settings"
-import type { TaskbarItem, TaskbarPayload } from "@/lib/taskbar-payload"
+import type { TaskbarItem, TaskbarPayload, WidgetRgbaImage } from "@/lib/taskbar-payload"
 
 /** Menu bar widget geometry in logical points (the PNG is shown 22pt tall, see taskbar/mac.rs). */
 export const MENU_BAR_METRICS = {
@@ -79,7 +79,8 @@ export const STYLE_METRICS = {
 const MASK_SIDE = 64
 
 /** Canvas font family (system UI font). */
-export const MENU_BAR_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif'
+export const MENU_BAR_FONT_FAMILY =
+  '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
 
 export type FontWeight = 500 | 700
 export type MeasureText = (text: string, weight: FontWeight, size: number) => number
@@ -569,24 +570,53 @@ function drawIcon(
   ctx.drawImage(tile, box.x, box.y, box.size, box.size)
 }
 
+/** Options shared by every output of the widget renderer. */
+export type MenuBarRenderOptions = {
+  dark: boolean
+  backdrop: MenuBarWidgetBackdrop
+  style: MenuBarWidgetStyle
+  colors?: MenuBarWidgetColors
+  /** Per text part: content color ("mono") or pace tone color ("color"). */
+  textColors?: MenuBarWidgetTextColors
+  /** Per pace state: tone color ("color") or content color ("mono"); combined with `textColors`. */
+  toneModes?: MenuBarWidgetToneModes
+  scale?: number
+}
+
 /**
  * Renders the menu bar widget to a transparent PNG whose logical height is 22pt
  * (Rust shows the image at that height). Returns base64 without the data: prefix.
  */
 export async function renderMenuBarWidgetPng(
   payload: TaskbarPayload,
-  opts: {
-    dark: boolean
-    backdrop: MenuBarWidgetBackdrop
-    style: MenuBarWidgetStyle
-    colors?: MenuBarWidgetColors
-    /** Per text part: content color ("mono") or pace tone color ("color"). */
-    textColors?: MenuBarWidgetTextColors
-    /** Per pace state: tone color ("color") or content color ("mono"); combined with `textColors`. */
-    toneModes?: MenuBarWidgetToneModes
-    scale?: number
-  }
+  opts: MenuBarRenderOptions
 ): Promise<string | null> {
+  const canvas = renderMenuBarWidgetCanvas(payload, opts)
+  if (!canvas) return null
+  const dataUrl = canvas.toDataURL("image/png")
+  const comma = dataUrl.indexOf(",")
+  return comma >= 0 ? dataUrl.slice(comma + 1) : null
+}
+
+/** Renders the same widget as `renderMenuBarWidgetPng`, as raw RGBA pixels (the Windows taskbar draws them natively). */
+export async function renderMenuBarWidgetRgba(
+  payload: TaskbarPayload,
+  opts: MenuBarRenderOptions
+): Promise<WidgetRgbaImage | null> {
+  const canvas = renderMenuBarWidgetCanvas(payload, opts)
+  if (!canvas) return null
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  let binary = ""
+  const chunk = 0x8000
+  for (let i = 0; i < data.length; i += chunk) {
+    binary += String.fromCharCode(...data.subarray(i, i + chunk))
+  }
+  return { width: canvas.width, height: canvas.height, rgba: btoa(binary) }
+}
+
+function renderMenuBarWidgetCanvas(payload: TaskbarPayload, opts: MenuBarRenderOptions): HTMLCanvasElement | null {
   const scale = opts.scale ?? MENU_BAR_RENDER_SCALE
   const colors = opts.colors ?? {}
   const textColors = opts.textColors ?? DEFAULT_TEXT_COLORS
@@ -675,9 +705,7 @@ export async function renderMenuBarWidgetPng(
     }
   }
 
-  const dataUrl = canvas.toDataURL("image/png")
-  const comma = dataUrl.indexOf(",")
-  return comma >= 0 ? dataUrl.slice(comma + 1) : null
+  return canvas
 }
 
 /** Scale `renderMenuBarWidgetPng` renders at unless told otherwise. */

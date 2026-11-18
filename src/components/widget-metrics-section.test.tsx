@@ -6,11 +6,13 @@ import { renderMenuBarWidgetPng } from "@/lib/menubar-widget-image"
 import type { MenuBarWidgetBackdrop } from "@/lib/settings"
 import type { PluginMeta } from "@/lib/plugin-types"
 
-const platform = vi.hoisted(() => ({ mac: false }))
+const platform = vi.hoisted(() => ({ mac: false, windows: false }))
 
 vi.mock("@/lib/platform", () => ({
   isMacPlatform: () => platform.mac,
-  widgetSurfaceName: () => (platform.mac ? "menu bar" : "taskbar"),
+  isWindowsPlatform: () => platform.windows,
+  usesRenderedWidget: () => platform.mac || platform.windows,
+  widgetSurfaceName: () => (platform.windows ? "taskbar" : "menu bar"),
 }))
 
 vi.mock("@/lib/menubar-widget-image", async () => ({
@@ -73,11 +75,16 @@ function renderSection(overrides: Partial<Parameters<typeof WidgetMetricsSection
 afterEach(() => {
   cleanup()
   platform.mac = false
+  platform.windows = false
 })
 
+/** Opens an accordion section by its title (collapsed by default). */
+const openSection = (title: string) => userEvent.click(screen.getByRole("button", { name: new RegExp(`^${title}`) }))
+
 describe("WidgetMetricsSection", () => {
-  it("checks the default metrics of an account provider", () => {
+  it("checks the default metrics of an account provider", async () => {
     renderSection()
+    await openSection("Providers")
     // "Session" is shown for Claude (first) and Codex; Claude's comes first.
     const claudeSessionLabel = screen.getAllByText("Session")[0].closest("label")!
     expect(within(claudeSessionLabel).getByRole("checkbox")).toHaveAttribute("aria-checked", "true")
@@ -89,6 +96,7 @@ describe("WidgetMetricsSection", () => {
     const { onWidgetProviderMetricsChange } = renderSection({
       widgetProviderMetrics: { "claude@1a2b3c4d": ["Weekly"] },
     })
+    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).toHaveBeenLastCalledWith({
@@ -106,6 +114,7 @@ describe("WidgetMetricsSection", () => {
     const { onWidgetProviderMetricsChange } = renderSection({
       widgetProviderMetrics: { codex: ["Weekly"] },
     })
+    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).toHaveBeenLastCalledWith({
@@ -116,6 +125,7 @@ describe("WidgetMetricsSection", () => {
 
   it("does not save metric changes for a provider hidden from the widget", async () => {
     const { onWidgetProviderMetricsChange } = renderSection({ widgetProviderIds: ["codex"] })
+    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).not.toHaveBeenCalled()
@@ -123,34 +133,23 @@ describe("WidgetMetricsSection", () => {
 
   it("toggling a provider saves the shown provider ids in plugin order", async () => {
     const { onWidgetProviderIdsChange } = renderSection({ widgetProviderIds: ["codex"] })
+    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Claude · work"))
     expect(onWidgetProviderIdsChange).toHaveBeenCalledWith(["claude@1a2b3c4d", "codex"])
   })
 
-  it("shows the taskbar visibility toggle", async () => {
+  it("on Windows shows the same widget tab with taskbar wording", async () => {
+    platform.windows = true
     const { onWidgetVisibleChange } = renderSection({ widgetVisible: false })
+    expect(screen.getByTestId("widget-layout-hybrid")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Widget tab layout")).toBeNull()
 
-    await userEvent.click(screen.getByText("Show in taskbar"))
+    await userEvent.click(screen.getByText("Show widget in taskbar"))
     expect(onWidgetVisibleChange).toHaveBeenCalledWith(true)
   })
 
-  it("hides the menu bar appearance controls and the layout switcher outside macOS", () => {
-    renderSection()
-    expect(screen.queryByLabelText("Widget tab layout")).toBeNull()
-    expect(screen.queryByText("Layout (testing)")).toBeNull()
-    expect(screen.queryByTestId("widget-layout-hybrid")).toBeNull()
-    expect(screen.queryByRole("radiogroup")).toBeNull()
-    expect(screen.queryByLabelText("Font")).toBeNull()
-    expect(screen.queryByTestId("menu-bar-widget-preview")).toBeNull()
-    expect(screen.queryByTestId("menu-bar-widget-colors")).toBeNull()
-    expect(screen.queryByText("Colors")).toBeNull()
-    expect(screen.queryByText("Providers and metrics")).toBeNull()
-  })
-
   describe("on macOS", () => {
-    /** Opens an accordion section by its title (collapsed by default). */
-    const openSection = (title: string) => userEvent.click(screen.getByRole("button", { name: new RegExp(`^${title}`) }))
     const state = (name: string) =>
       within(screen.getByRole("radiogroup", { name }))
         .getAllByRole("radio")
@@ -222,10 +221,13 @@ describe("WidgetMetricsSection", () => {
     describe("background controls", () => {
       const controls = () => within(screen.getByTestId("menu-bar-widget-backdrop"))
 
-      it("only shows on macOS", () => {
-        platform.mac = false
+      it("hides the Blur slider on Windows (no native blur behind the taskbar widget)", async () => {
+        platform.windows = true
         renderSection()
-        expect(screen.queryByTestId("menu-bar-widget-backdrop")).toBeNull()
+        await openSection("Background")
+        expect(controls().getByRole("slider", { name: "Opacity" })).toBeInTheDocument()
+        expect(controls().getByRole("slider", { name: "Glass" })).toBeInTheDocument()
+        expect(controls().queryByRole("slider", { name: "Blur" })).toBeNull()
       })
 
       it("are collapsed until the Background section is opened", async () => {

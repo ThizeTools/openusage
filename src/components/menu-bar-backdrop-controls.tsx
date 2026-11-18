@@ -3,6 +3,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { useSystemDark } from "@/hooks/use-system-dark"
 import { backdropCardColor } from "@/lib/menubar-widget-image"
+import { isWindowsPlatform } from "@/lib/platform"
 import type { MenuBarWidgetBackdrop } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
@@ -140,7 +141,7 @@ export function MenuBarBackdropControls({ backdrop, onChange, variant = "cards" 
               })}
             </div>
           </div>
-          {SLIDERS.map(({ key, label, note }) => (
+          {SLIDERS.filter(({ key }) => key !== "blur" || !isWindowsPlatform()).map(({ key, label, note }) => (
             <SliderRow
               key={key}
               label={label}

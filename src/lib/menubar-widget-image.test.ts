@@ -3,7 +3,9 @@ import {
   defaultToneColors,
   layoutMenuBarWidget,
   MENU_BAR_FONT_FAMILY,
+  MENU_BAR_RENDER_SCALE,
   renderMenuBarWidgetPng,
+  renderMenuBarWidgetRgba,
   MENU_BAR_METRICS as M,
   backdropCardColor,
   menuBarImageSizePt,
@@ -480,6 +482,17 @@ describe("renderMenuBarWidgetPng", () => {
     await expect(renderMenuBarWidgetPng(demo, opts)).resolves.toBe("QUJD")
   })
 
+  it("renderMenuBarWidgetRgba returns the raw pixels as base64 with the canvas size", async () => {
+    const { ctx } = fakeCanvas()
+    const data = new Uint8ClampedArray([1, 2, 3, 4, 5, 6, 7, 8])
+    ;(ctx as unknown as { getImageData: unknown }).getImageData = vi.fn(() => ({ data }))
+    const image = await renderMenuBarWidgetRgba(demo, opts)
+    expect(image).not.toBeNull()
+    expect(image!.rgba).toBe(btoa(String.fromCharCode(1, 2, 3, 4, 5, 6, 7, 8)))
+    expect(image!.width).toBeGreaterThan(0)
+    expect(image!.height).toBe(M.height * MENU_BAR_RENDER_SCALE)
+  })
+
   it("uses the built-in tone colors by default", async () => {
     const { drawn } = fakeCanvas()
     await renderMenuBarWidgetPng(demo, opts)
@@ -746,6 +759,8 @@ describe("renderMenuBarWidgetPng", () => {
     for (const font of [...measured, ...drawn.map((d) => d.font)]) {
       expect(font.endsWith(MENU_BAR_FONT_FAMILY)).toBe(true)
     }
-    expect(MENU_BAR_FONT_FAMILY).toBe('-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif')
+    expect(MENU_BAR_FONT_FAMILY).toBe(
+      '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
+    )
   })
 })

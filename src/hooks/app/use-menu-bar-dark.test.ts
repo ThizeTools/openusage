@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => state.isTauri, invoke: state.invokeMock }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: state.listenMock }))
-vi.mock("@/lib/platform", () => ({ isMacPlatform: () => state.mac }))
+vi.mock("@/lib/platform", () => ({ usesRenderedWidget: () => state.mac }))
 vi.mock("@/hooks/use-system-dark", () => ({ useSystemDark: () => state.systemDark }))
 
 import { useMenuBarDark } from "@/hooks/app/use-menu-bar-dark"
@@ -85,7 +85,7 @@ describe("useMenuBarDark", () => {
     errorSpy.mockRestore()
   })
 
-  it("uses the system scheme without calling native outside macOS or Tauri", () => {
+  it("uses the system scheme without calling native outside macOS/Windows or Tauri", () => {
     state.mac = false
     state.systemDark = true
     expect(renderHook(() => useMenuBarDark()).result.current).toBe(true)

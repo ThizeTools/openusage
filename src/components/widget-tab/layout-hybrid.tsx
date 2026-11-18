@@ -9,6 +9,7 @@ import { StylePicker } from "@/components/widget-tab/style-picker"
 import { summarizeBackdrop, summarizeColors, summarizeProviders, summarizeStyle } from "@/components/widget-tab/summaries"
 import type { WidgetTabLayoutProps, WidgetTabModel } from "@/components/widget-tab/types"
 import { Switch } from "@/components/ui/switch"
+import { widgetSurfaceName } from "@/lib/platform"
 import { matchPreset, WIDGET_PRESETS } from "@/lib/widget-presets"
 
 type SectionId = "layout" | "background" | "colors" | "providers"
@@ -28,6 +29,7 @@ function currentPresetName(model: WidgetTabModel): string {
  * the grid never changes height while editing).
  */
 export function LayoutHybrid({ model }: WidgetTabLayoutProps) {
+  const surface = widgetSurfaceName()
   const [openSections, setOpenSections] = useState<ReadonlySet<SectionId>>(new Set())
   const sectionProps = (id: SectionId) => ({
     open: openSections.has(id),
@@ -48,10 +50,10 @@ export function LayoutHybrid({ model }: WidgetTabLayoutProps) {
       </div>
 
       <label className="flex min-h-10 items-center gap-3 rounded-lg border border-border/60 bg-card px-3 text-[13px] text-foreground select-none">
-        <span className="flex-1">Show widget in menu bar</span>
+        <span className="flex-1">Show widget in {surface}</span>
         <Switch
           key={`widget-visible-${model.visible}`}
-          aria-label="Show widget in menu bar"
+          aria-label={`Show widget in ${surface}`}
           checked={model.visible}
           onCheckedChange={(checked) => model.onVisibleChange(checked === true)}
         />

@@ -254,7 +254,7 @@ describe("SettingsWindowApp", () => {
     expect(await screen.findByText("Reset Timers")).toBeInTheDocument()
     expect(screen.queryByText("Usage Mode")).not.toBeInTheDocument()
     await openTab("Widget")
-    expect(await screen.findByText("Taskbar Widget")).toBeInTheDocument()
+    expect(await screen.findByTestId("widget-layout-hybrid")).toBeInTheDocument()
   })
 
   it("saves the theme mode when selecting Dark", async () => {
@@ -317,6 +317,7 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
+    await userEvent.click(await screen.findByRole("button", { name: /^Providers/ }))
     // Alpha's default selection is its only progress metric, Weekly.
     await userEvent.click(await screen.findByLabelText("Weekly"))
     expect(state.saveWidgetProviderMetricsMock).toHaveBeenCalledWith({ a: [] })
@@ -334,8 +335,8 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    await screen.findByText("Taskbar Widget")
-    await userEvent.click(await screen.findByText("Show in taskbar"))
+    await screen.findByTestId("widget-layout-hybrid")
+    await userEvent.click(await screen.findByText("Show widget in menu bar"))
     await waitFor(() =>
       expect(state.invokeMock).toHaveBeenCalledWith("set_widget_visible", { visible: true })
     )
@@ -345,12 +346,12 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    const label = (await screen.findByText("Show in taskbar")).closest("label")!
-    expect(within(label).getByRole("checkbox")).toHaveAttribute("aria-checked", "false")
+    const label = (await screen.findByText("Show widget in menu bar")).closest("label")!
+    expect(within(label).getByRole("switch")).toHaveAttribute("aria-checked", "false")
     await waitFor(() => expect(state.eventHandlers["widget:visibility"]).toBeDefined())
     act(() => state.eventHandlers["widget:visibility"]({ payload: true }))
     await waitFor(() =>
-      expect(within(label).getByRole("checkbox")).toHaveAttribute("aria-checked", "true")
+      expect(within(label).getByRole("switch")).toHaveAttribute("aria-checked", "true")
     )
   })
 })

@@ -1,7 +1,7 @@
 //! Software rendering of the taskbar widget into a premultiplied BGRA frame.
 //! Text is drawn with GDI into a scratch DIB and used as a coverage mask.
 
-use super::{TaskbarItem, TaskbarPayload};
+use super::{TaskbarItem, TaskbarPayload, WidgetImage};
 use base64::Engine;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
@@ -33,6 +33,49 @@ impl Frame {
         let ch = |shift: u32, c: u8| (c as u32 * a + ((d >> shift) & 255) * inv) / 255;
         let na = a + ((d >> 24) & 255) * inv / 255;
         self.px[i] = (na << 24) | (ch(16, r) << 16) | (ch(8, g) << 8) | ch(0, b);
+    }
+
+    /// Source-over of a premultiplied 0xAARRGGBB pixel.
+    fn blend_premul(&mut self, x: i32, y: i32, src: u32) {
+        if x < 0 || y < 0 || x >= self.w || y >= self.h {
+            return;
+        }
+        let a = (src >> 24) & 255;
+        if a == 0 {
+            return;
+        }
+        let i = (y * self.w + x) as usize;
+        let d = self.px[i];
+        let inv = 255 - a;
+        let ch = |shift: u32| (((src >> shift) & 255) + ((d >> shift) & 255) * inv / 255).min(255);
+        let na = (a + ((d >> 24) & 255) * inv / 255).min(255);
+        self.px[i] = (na << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0);
+    }
+
+    /// Draws premultiplied pixels (`sw`x`sh`) scaled to `dw`x`dh` with a box filter, top-left at (x, y).
+    fn draw_scaled(&mut self, src: &[u32], sw: i32, sh: i32, x: i32, y: i32, dw: i32, dh: i32) {
+        for ty in 0..dh {
+            let sy0 = ty * sh / dh;
+            let sy1 = ((ty + 1) * sh / dh).max(sy0 + 1).min(sh);
+            for tx in 0..dw {
+                let sx0 = tx * sw / dw;
+                let sx1 = ((tx + 1) * sw / dw).max(sx0 + 1).min(sw);
+                let mut sum = [0u32; 4];
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        let p = src[(sy * sw + sx) as usize];
+                        sum[0] += (p >> 24) & 255;
+                        sum[1] += (p >> 16) & 255;
+                        sum[2] += (p >> 8) & 255;
+                        sum[3] += p & 255;
+                    }
+                }
+                let n = ((sy1 - sy0) * (sx1 - sx0)) as u32;
+                let avg = |v: u32| v / n;
+                let px = (avg(sum[0]) << 24) | (avg(sum[1]) << 16) | (avg(sum[2]) << 8) | avg(sum[3]);
+                self.blend_premul(x + tx, y + ty, px);
+            }
+        }
     }
 
     fn fill_round(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, r: i32, rgb: Rgb, a: u8) {
@@ -228,6 +271,29 @@ fn icon_rgb(brand: Option<&str>, light: bool, fg: Rgb) -> Rgb {
     rgb
 }
 
+/// Scale the frontend renders the widget at (MENU_BAR_RENDER_SCALE in menubar-widget-image.ts).
+const IMAGE_SCALE: i32 = 3;
+/// The widget is 22pt tall for a 36px taskbar; it grows and shrinks with the taskbar height.
+const TASKBAR_REFERENCE_PX: i32 = 36;
+
+/// Decodes the frontend-rendered widget into premultiplied 0xAARRGGBB pixels; None when malformed.
+fn decode_image(image: &WidgetImage) -> Option<(i32, i32, Vec<u32>)> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&image.rgba).ok()?;
+    let (w, h) = (image.width as usize, image.height as usize);
+    if w == 0 || h == 0 || w > 16_384 || h > 1_024 || bytes.len() != w * h * 4 {
+        return None;
+    }
+    let px = bytes
+        .chunks_exact(4)
+        .map(|p| {
+            let a = p[3] as u32;
+            let pm = |c: u8| (c as u32 * a + 127) / 255;
+            (a << 24) | (pm(p[0]) << 16) | (pm(p[1]) << 8) | pm(p[2])
+        })
+        .collect();
+    Some((w as i32, h as i32, px))
+}
+
 struct Cell<'a> {
     item: &'a TaskbarItem,
     label_w: i32,
@@ -251,6 +317,18 @@ pub unsafe fn render(payload: Option<&TaskbarPayload>, height: i32, dpi: u32, li
             f.fill_round(px(2), px(4), w - px(2), height - px(4), px(4), fg, if light { 20 } else { 26 });
         }
         unsafe { gdi.draw_text(&mut f, gdi.label, text, pad, (height - line_h) / 2, fg, 170) };
+        return f;
+    }
+
+    // The frontend's own rendering (same look and settings as the macOS menu bar widget).
+    if let Some((sw, sh, pixels)) = payload.and_then(|p| p.widget_image.as_ref()).and_then(decode_image) {
+        let (margin, dh) = (px(2), (sh * height / (IMAGE_SCALE * TASKBAR_REFERENCE_PX)).clamp(1, height));
+        let dw = (sw * dh / sh).max(1);
+        let mut f = Frame::new(dw + margin * 2, height);
+        if hover {
+            f.fill_round(px(2), px(4), f.w - px(2), height - px(4), px(4), fg, if light { 20 } else { 26 });
+        }
+        f.draw_scaled(&pixels, sw, sh, margin, (height - dh) / 2, dw, dh);
         return f;
     }
 
@@ -372,6 +450,7 @@ mod tests {
             tooltip: String::new(),
             menu_bar_image: None,
             menu_bar_backdrop: None,
+            widget_image: None,
             providers: vec![
                 TaskbarProvider {
                     brand_color: Some("#DE7356".into()),

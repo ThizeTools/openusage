@@ -50,6 +50,16 @@ pub struct TaskbarBackdrop {
     pub height_pt: f64,
 }
 
+/// Windows: the widget pre-rendered by the frontend (same renderer as the macOS menu bar), straight RGBA, base64.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct WidgetImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskbarPayload {
@@ -64,6 +74,10 @@ pub struct TaskbarPayload {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub menu_bar_backdrop: Option<TaskbarBackdrop>,
+    /// Windows: pre-rendered widget (rendered at 3x); null/absent falls back to the native text layout.
+    #[serde(default)]
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub widget_image: Option<WidgetImage>,
 }
 
 pub(crate) struct State {
@@ -92,7 +106,7 @@ pub fn taskbar_widget_update(payload: TaskbarPayload) {
     mac::notify();
 }
 
-/// Appearance of the real menu bar: "dark" | "light", or null when unknown / not macOS.
+/// Appearance of the real menu bar / taskbar: "dark" | "light", or null when unknown / not macOS or Windows.
 /// Async so the main-thread read never blocks the main thread itself.
 #[tauri::command]
 pub async fn menu_bar_appearance(app: tauri::AppHandle) -> Option<String> {
@@ -100,7 +114,12 @@ pub async fn menu_bar_appearance(app: tauri::AppHandle) -> Option<String> {
     {
         mac::query_appearance(&app).map(str::to_string)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _ = app;
+        Some(if win::taskbar_is_light() { "light" } else { "dark" }.to_string())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         None

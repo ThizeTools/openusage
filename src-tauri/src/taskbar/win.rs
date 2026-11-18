@@ -5,8 +5,8 @@ use super::{lock_state, paint};
 use std::cell::RefCell;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
-use tauri::AppHandle;
+use std::sync::atomic::{AtomicI8, AtomicIsize, AtomicU32, Ordering};
+use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -26,6 +26,9 @@ const CMD_QUIT: usize = 4;
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static HOST: AtomicIsize = AtomicIsize::new(0);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+/// Last taskbar theme reported to the frontend: -1 unknown, 0 dark, 1 light.
+static LAST_THEME: AtomicI8 = AtomicI8::new(-1);
+const APPEARANCE_EVENT: &str = "menubar:appearance";
 
 #[derive(Clone)]
 struct Win {
@@ -288,6 +291,24 @@ unsafe fn dpi_of(hwnd: HWND) -> u32 {
     }
 }
 
+/// Whether the taskbar uses the light theme (it is separate from the apps' theme).
+pub fn taskbar_is_light() -> bool {
+    unsafe { read_light_taskbar() }
+}
+
+/// Tells the frontend when the taskbar theme changed so it re-renders the widget in matching colors.
+fn report_theme(light: bool) {
+    let value = i8::from(light);
+    if LAST_THEME.swap(value, Ordering::SeqCst) == value {
+        return;
+    }
+    if let Some(app) = APP.get() {
+        if let Err(error) = app.emit(APPEARANCE_EVENT, if light { "light" } else { "dark" }) {
+            log::warn!("taskbar: failed to emit appearance: {error}");
+        }
+    }
+}
+
 unsafe fn read_light_taskbar() -> bool {
     let key = wide_z(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
     let name = wide_z("SystemUsesLightTheme");
@@ -315,6 +336,7 @@ unsafe fn repaint() {
         let height = (rc.bottom - rc.top).max(1);
         w.dpi = dpi_of(w.taskbar);
         w.light = read_light_taskbar();
+        report_theme(w.light);
         let frame = paint::render(payload.as_ref(), height, w.dpi, w.light, hover);
         paint::present(w.widget, &frame);
         w.size = (frame.w, frame.h);

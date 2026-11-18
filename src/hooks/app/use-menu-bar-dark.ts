@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { useSystemDark } from "@/hooks/use-system-dark"
-import { isMacPlatform } from "@/lib/platform"
+import { usesRenderedWidget } from "@/lib/platform"
 
 const APPEARANCE_EVENT = "menubar:appearance"
 
@@ -13,16 +13,17 @@ function parseAppearance(value: unknown): boolean | null {
 }
 
 /**
- * Whether the real menu bar is dark. On recent macOS that depends on the wallpaper, not only on the
- * system theme, so on macOS in Tauri the native side reports it (`menu_bar_appearance` + the
- * `menubar:appearance` event). Everywhere else, or while it is unknown, it follows the system scheme.
+ * Whether the real menu bar / taskbar is dark. On recent macOS that depends on the wallpaper, and on Windows the
+ * taskbar theme is separate from the app theme, so on macOS and Windows in Tauri the native side reports it
+ * (`menu_bar_appearance` + the `menubar:appearance` event). Everywhere else, or while it is unknown, it follows
+ * the system scheme.
  */
 export function useMenuBarDark(): boolean {
   const systemDark = useSystemDark()
   const [native, setNative] = useState<boolean | null>(null)
 
   useEffect(() => {
-    if (!isTauri() || !isMacPlatform()) return
+    if (!isTauri() || !usesRenderedWidget()) return
     let cancelled = false
     let gotEvent = false
     let unlisten: (() => void) | undefined

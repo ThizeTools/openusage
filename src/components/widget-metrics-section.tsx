@@ -1,8 +1,5 @@
-import { ProvidersList } from "@/components/widget-tab/providers-list";
 import { LayoutHybrid } from "@/components/widget-tab/layout-hybrid";
-import type { WidgetPluginConfig, WidgetProvidersModel, WidgetTabModel } from "@/components/widget-tab/types";
-import { Checkbox } from "@/components/ui/checkbox";
-import { isMacPlatform, widgetSurfaceName } from "@/lib/platform";
+import type { WidgetPluginConfig, WidgetTabModel } from "@/components/widget-tab/types";
 import type { PluginMeta } from "@/lib/plugin-types";
 import {
   type MenuBarWidgetBackdrop,
@@ -37,7 +34,7 @@ interface WidgetMetricsSectionProps {
   onMenuBarWidgetToneModesChange: (value: MenuBarWidgetToneModes) => void;
 }
 
-/** Bundles the section's props into the model every macOS layout works with. */
+/** Bundles the section's props into the model the widget tab works with. */
 function buildWidgetTabModel(props: WidgetMetricsSectionProps): WidgetTabModel {
   return {
     visible: props.widgetVisible,
@@ -61,55 +58,11 @@ function buildWidgetTabModel(props: WidgetMetricsSectionProps): WidgetTabModel {
   };
 }
 
-/** macOS: the menu bar widget tab. */
-function MenuBarWidgetTab(props: WidgetMetricsSectionProps) {
+/** Widget settings: the same tab on macOS (menu bar) and Windows (taskbar). */
+export function WidgetMetricsSection(props: WidgetMetricsSectionProps) {
   return (
     <section>
       <LayoutHybrid model={buildWidgetTabModel(props)} />
     </section>
   );
-}
-
-/** Windows / Linux: visibility plus the providers and metrics shown on the taskbar widget. */
-function TaskbarWidgetSection({
-  plugins,
-  pluginsMeta,
-  widgetVisible,
-  onWidgetVisibleChange,
-  widgetProviderIds,
-  onWidgetProviderIdsChange,
-  widgetProviderMetrics,
-  onWidgetProviderMetricsChange,
-}: WidgetMetricsSectionProps) {
-  const providers: WidgetProvidersModel = {
-    plugins,
-    pluginsMeta,
-    providerIds: widgetProviderIds,
-    onProviderIdsChange: onWidgetProviderIdsChange,
-    providerMetrics: widgetProviderMetrics,
-    onProviderMetricsChange: onWidgetProviderMetricsChange,
-  };
-
-  return (
-    <section>
-      <h3 className="text-lg font-semibold mb-0">Taskbar Widget</h3>
-      <p className="text-sm text-muted-foreground mb-2">
-        Choose which providers and metrics appear on the {widgetSurfaceName()}.
-      </p>
-      <label className="flex items-center gap-2 text-sm select-none text-foreground mb-2">
-        <Checkbox
-          key={`widget-visible-${widgetVisible}`}
-          checked={widgetVisible}
-          onCheckedChange={(checked) => onWidgetVisibleChange(checked === true)}
-        />
-        Show in {widgetSurfaceName()}
-      </label>
-      <ProvidersList model={providers} />
-    </section>
-  );
-}
-
-/** Widget settings: on macOS the menu bar widget tab, elsewhere the taskbar widget's providers and metrics. */
-export function WidgetMetricsSection(props: WidgetMetricsSectionProps) {
-  return isMacPlatform() ? <MenuBarWidgetTab {...props} /> : <TaskbarWidgetSection {...props} />;
 }

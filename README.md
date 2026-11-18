@@ -17,7 +17,7 @@ OpenUsage lives in your menu bar and shows you how much of your AI coding subscr
 - **One glance.** All your AI tools, one panel.
 - **Always up-to-date.** Refreshes automatically on a schedule you pick.
 - **Sign in inside the app.** Add accounts in Settings → Accounts (browser sign-in, device code or API key). Several accounts per provider. No CLI files needed.
-- **Taskbar widget.** Usage lives right on the Windows taskbar, next to the clock: one icon per provider with Session / Weekly as used/expected, colored by pace. Hover for details, click for the stats panel, right-click for options. Pick providers and metric in Settings.
+- **Taskbar widget.** Usage lives right on the Windows taskbar, next to the clock: one icon per provider with Session / Weekly as used/expected, colored by pace. Hover for details, click for the stats panel, right-click for options. Same customization as the macOS menu bar widget in Settings: presets, layout styles, background, text and pace colors, providers and metrics.
 - **Global shortcuts.** Separate customizable shortcuts to toggle the stats popup and the taskbar widget from anywhere.
 - **Dedicated Settings window.** Settings open in their own resizable window with custom Windows controls; the tray popup stays focused on your usage.
 - **Lightweight.** Opens instantly, stays out of your way.

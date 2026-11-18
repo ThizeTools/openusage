@@ -26,6 +26,9 @@ export type TaskbarBackdrop = {
   heightPt: number
 }
 
+/** Windows: raw widget pixels (straight, non-premultiplied RGBA, base64) drawn natively on the taskbar. */
+export type WidgetRgbaImage = { width: number; height: number; rgba: string }
+
 export type TaskbarPayload = {
   providers: TaskbarProvider[]
   tooltip: string
@@ -33,6 +36,8 @@ export type TaskbarPayload = {
   menuBarImage?: string | null
   /** macOS: native blur behind the image; null when the background is off or its blur is 0. */
   menuBarBackdrop?: TaskbarBackdrop | null
+  /** Windows: the pre-rendered widget (rendered at MENU_BAR_RENDER_SCALE); null falls back to the native text layout. */
+  widgetImage?: WidgetRgbaImage | null
 }
 
 type TaskbarProviderDraft = Omit<TaskbarProvider, "iconMask"> & { iconUrl: string }

@@ -4,8 +4,13 @@ import { LazyStore } from "@tauri-apps/plugin-store"
 import { useMenuBarDark } from "@/hooks/app/use-menu-bar-dark"
 import { useWidgetRows } from "@/hooks/app/use-widget-rows"
 import { getIconMask } from "@/lib/icon-mask"
-import { MENU_BAR_METRICS, menuBarImageSizePt, renderMenuBarWidgetPng } from "@/lib/menubar-widget-image"
-import { isMacPlatform } from "@/lib/platform"
+import {
+  MENU_BAR_METRICS,
+  menuBarImageSizePt,
+  renderMenuBarWidgetPng,
+  renderMenuBarWidgetRgba,
+} from "@/lib/menubar-widget-image"
+import { isMacPlatform, usesRenderedWidget } from "@/lib/platform"
 import {
   DEFAULT_MENU_BAR_WIDGET_BACKDROP,
   DEFAULT_MENU_BAR_WIDGET_COLORS,
@@ -45,7 +50,7 @@ export function useTaskbarWidgetSync(): void {
 
   // Menu bar style, backdrop, colors, text colors and tone modes: load once, then follow changes made in the Settings window.
   useEffect(() => {
-    if (!isTauri() || !isMacPlatform()) return
+    if (!isTauri() || !usesRenderedWidget()) return
     let cancelled = false
     const unlisteners: (() => void)[] = []
 
@@ -106,8 +111,9 @@ export function useTaskbarWidgetSync(): void {
   useEffect(() => {
     if (!isTauri()) return
     const mac = isMacPlatform()
+    const rendered = usesRenderedWidget()
     const draft = buildTaskbarPayload(rows)
-    const draftKey = mac
+    const draftKey = rendered
       ? `${JSON.stringify(draft)}|${dark ? "dark" : "light"}|${JSON.stringify(backdrop)}|${style}|${JSON.stringify(colors)}|${JSON.stringify(textColors)}|${JSON.stringify(toneModes)}`
       : JSON.stringify(draft)
     if (draftKey === lastSentKeyRef.current) return
@@ -123,22 +129,21 @@ export function useTaskbarWidgetSync(): void {
       if (cancelled) return
 
       const payload: TaskbarPayload = { providers, tooltip: draft.tooltip }
-      if (mac) {
+      if (rendered) {
+        const appearance = { dark, backdrop, style, colors, textColors, toneModes }
         try {
-          payload.menuBarImage = await renderMenuBarWidgetPng(payload, {
-            dark,
-            backdrop,
-            style,
-            colors,
-            textColors,
-            toneModes,
-          })
-          const size = payload.menuBarImage ? menuBarImageSizePt(payload.menuBarImage) : null
-          payload.menuBarBackdrop = buildMenuBarBackdrop(backdrop, size, MENU_BAR_METRICS.cardRadius)
+          if (mac) {
+            payload.menuBarImage = await renderMenuBarWidgetPng(payload, appearance)
+            const size = payload.menuBarImage ? menuBarImageSizePt(payload.menuBarImage) : null
+            payload.menuBarBackdrop = buildMenuBarBackdrop(backdrop, size, MENU_BAR_METRICS.cardRadius)
+          } else {
+            payload.widgetImage = await renderMenuBarWidgetRgba(payload, appearance)
+          }
         } catch (error) {
-          console.error("Failed to render menu bar widget image:", error)
+          console.error("Failed to render widget image:", error)
           payload.menuBarImage = null
           payload.menuBarBackdrop = null
+          payload.widgetImage = null
         }
         if (cancelled) return
       }
