@@ -15,7 +15,7 @@ export type TaskbarProvider = {
   items: TaskbarItem[]
 }
 
-/** macOS: native blur drawn under the widget image (the PNG itself never blurs). */
+/** Blur under the widget's background card (macOS: native blur view; Windows: blurred wallpaper drawn natively). */
 export type TaskbarBackdrop = {
   /** 0..1 strength (alpha of the native blur view). */
   blur: number
@@ -34,7 +34,7 @@ export type TaskbarPayload = {
   tooltip: string
   /** macOS: base64 PNG (no data: prefix) of the pre-rendered menu bar widget. */
   menuBarImage?: string | null
-  /** macOS: native blur behind the image; null when the background is off or its blur is 0. */
+  /** Blur under the image (macOS and Windows); null when the background is off or its blur is 0. */
   menuBarBackdrop?: TaskbarBackdrop | null
   /** Windows: the pre-rendered widget (rendered at MENU_BAR_RENDER_SCALE); null falls back to the native text layout. */
   widgetImage?: WidgetRgbaImage | null

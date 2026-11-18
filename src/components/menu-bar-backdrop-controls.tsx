@@ -141,11 +141,11 @@ export function MenuBarBackdropControls({ backdrop, onChange, variant = "cards" 
               })}
             </div>
           </div>
-          {SLIDERS.filter(({ key }) => key !== "blur" || !isWindowsPlatform()).map(({ key, label, note }) => (
+          {SLIDERS.filter(({ key }) => key !== "glass" || !isWindowsPlatform()).map(({ key, label, note }) => (
             <SliderRow
               key={key}
               label={label}
-              note={note}
+              note={key === "blur" && isWindowsPlatform() ? "Blur of the desktop wallpaper behind the widget; only visible in the taskbar." : note}
               value={backdrop[key]}
               variant={variant}
               onChange={(value) => onChange({ ...backdrop, [key]: value })}

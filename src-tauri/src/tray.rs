@@ -85,8 +85,9 @@ pub(crate) fn tray_icon(app_handle: &AppHandle) -> tauri::Result<tauri::image::I
 fn tray_icon(app_handle: &AppHandle) -> tauri::Result<tauri::image::Image<'static>> {
     Ok(app_handle
         .default_window_icon()
-        .cloned()
-        .expect("default window icon must be configured"))
+        .expect("default window icon must be configured")
+        .clone()
+        .to_owned())
 }
 
 pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {

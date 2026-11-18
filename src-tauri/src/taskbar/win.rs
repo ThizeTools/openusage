@@ -1,14 +1,14 @@
 //! Win32 side of the taskbar widget. Runs on its own thread with its own
 //! message loop, so a busy Tauri main thread never stalls Explorer.
 
-use super::{lock_state, paint};
+use super::{backdrop, lock_state, paint, TaskbarBackdrop};
 use std::cell::RefCell;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI8, AtomicIsize, AtomicU32, Ordering};
 use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::Controls::*;
@@ -28,6 +28,8 @@ static HOST: AtomicIsize = AtomicIsize::new(0);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 /// Last taskbar theme reported to the frontend: -1 unknown, 0 dark, 1 light.
 static LAST_THEME: AtomicI8 = AtomicI8::new(-1);
+/// Ticks counted while the blur is on (repaints every 30 s pick up slideshow wallpapers).
+static BLUR_TICKS: AtomicU32 = AtomicU32::new(0);
 const APPEARANCE_EVENT: &str = "menubar:appearance";
 
 #[derive(Clone)]
@@ -94,6 +96,8 @@ unsafe fn run() {
     let host_class = wide_z("OpenUsageTaskbarHost");
     let widget_class = wide_z("OpenUsageTaskbarWidget");
     unsafe {
+        // COM (apartment-threaded) for reading the desktop wallpaper behind the widget (taskbar/backdrop.rs).
+        let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_WIN95_CLASSES,
@@ -128,6 +132,15 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         match msg {
             WM_TIMER if wparam == TICK_TIMER => tick(),
             WM_APP_NOTIFY => sync(),
+            // A new wallpaper or display layout: the blur under the widget's card must be read again.
+            WM_SETTINGCHANGE if wparam == SPI_SETDESKWALLPAPER as usize => {
+                backdrop::invalidate();
+                repaint();
+            }
+            WM_DISPLAYCHANGE => {
+                backdrop::invalidate();
+                repaint();
+            }
             m if m != 0 && m == TASKBAR_CREATED.load(Ordering::SeqCst) => {
                 destroy();
                 sync();
@@ -214,8 +227,22 @@ unsafe fn tick() {
         if rc.bottom - rc.top != w.size.1 || dpi_of(w.taskbar) != w.dpi || read_light_taskbar() != w.light {
             repaint();
         }
+        let before = win().and_then(|cur| cur.pos);
         reposition(false);
+        if blur_active() {
+            // The blur under the card shows the wallpaper behind the widget: paint again after a move, and
+            // every 30 s for slideshows, which change the wallpaper without telling anyone.
+            let moved = win().and_then(|cur| cur.pos) != before;
+            if moved || BLUR_TICKS.fetch_add(1, Ordering::Relaxed) % 30 == 29 {
+                repaint();
+            }
+        }
     }
+}
+
+/// Whether the latest payload asks for the blur under the widget's card.
+fn blur_active() -> bool {
+    lock_state().payload.as_ref().and_then(|p| p.menu_bar_backdrop).is_some_and(|b| b.blur > 0.0)
 }
 
 unsafe fn create() {
@@ -337,7 +364,10 @@ unsafe fn repaint() {
         w.dpi = dpi_of(w.taskbar);
         w.light = read_light_taskbar();
         report_theme(w.light);
-        let frame = paint::render(payload.as_ref(), height, w.dpi, w.light, hover);
+        let mut frame = paint::render(payload.as_ref(), height, w.dpi, w.light, hover);
+        if let Some(b) = payload.as_ref().and_then(|p| p.menu_bar_backdrop) {
+            draw_backdrop(&w, &mut frame, &b);
+        }
         paint::present(w.widget, &frame);
         w.size = (frame.w, frame.h);
 
@@ -390,14 +420,13 @@ unsafe fn stacked_edge(taskbar: HWND, own: HWND, tray_left: i32, slack: i32) -> 
     edge
 }
 
-/// Keeps the widget just left of the notification area (and of other apps'
-/// widgets docked there).
-unsafe fn reposition(force: bool) {
-    let Some(mut w) = win() else { return };
+/// Taskbar client x the widget goes to for a given width: just left of the notification area and of other
+/// apps' widgets docked there.
+unsafe fn target_left(w: &Win, width: i32) -> Option<i32> {
     unsafe {
         let tray = FindWindowExW(w.taskbar, null_mut(), wide_z("TrayNotifyWnd").as_ptr(), null());
         if tray.is_null() {
-            return;
+            return None;
         }
         let (mut tray_rc, mut bar_rc): (RECT, RECT) = (std::mem::zeroed(), std::mem::zeroed());
         GetWindowRect(tray, &mut tray_rc);
@@ -405,7 +434,38 @@ unsafe fn reposition(force: bool) {
         let edge = stacked_edge(w.taskbar, w.widget, tray_rc.left, w.dpi as i32 * 8 / 96);
         let mut p = POINT { x: edge, y: bar_rc.top };
         ScreenToClient(w.taskbar, &mut p);
-        let left = p.x - w.size.0 - w.dpi as i32 * 2 / 96;
+        Some(p.x - width - w.dpi as i32 * 2 / 96)
+    }
+}
+
+/// Draws the blurred desktop wallpaper under the widget's background card, where the widget will sit.
+/// Windows cannot blur what is behind a child of the taskbar natively (see taskbar/backdrop.rs).
+unsafe fn draw_backdrop(w: &Win, frame: &mut paint::Frame, b: &TaskbarBackdrop) {
+    let Some((_, _, _, card_h)) = frame.card else { return };
+    let usable = [b.blur, b.radius, b.height_pt].iter().all(|v| v.is_finite()) && b.blur > 0.0 && b.height_pt > 0.0;
+    if !usable {
+        return;
+    }
+    let Some(left) = (unsafe { target_left(w, frame.w) }) else { return };
+    let mut origin = POINT { x: left, y: 0 };
+    let mut bar: RECT = unsafe { std::mem::zeroed() };
+    unsafe {
+        ClientToScreen(w.taskbar, &mut origin);
+        GetWindowRect(w.taskbar, &mut bar);
+    }
+    let bar = backdrop::Rect { l: bar.left, t: bar.top, r: bar.right, b: bar.bottom };
+    let radius = b.radius.max(0.0) * card_h as f64 / b.height_pt;
+    backdrop::with_strip(bar, w.dpi, w.light, |strip| {
+        frame.underlay_card(b.blur.min(1.0), radius, |x, y| strip.at(origin.x + x, origin.y + y));
+    });
+}
+
+/// Keeps the widget just left of the notification area (and of other apps'
+/// widgets docked there).
+unsafe fn reposition(force: bool) {
+    let Some(mut w) = win() else { return };
+    unsafe {
+        let Some(left) = target_left(&w, w.size.0) else { return };
         let covered = !GetWindow(w.widget, GW_HWNDPREV).is_null();
         if force || covered || w.pos != Some(left) {
             SetWindowPos(w.widget, HWND_TOP, left, 0, w.size.0, w.size.1, SWP_NOACTIVATE | SWP_SHOWWINDOW);

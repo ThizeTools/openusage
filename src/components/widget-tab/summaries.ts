@@ -1,4 +1,5 @@
 import { MENU_BAR_STYLE_LABELS } from "@/components/menu-bar-widget-preview"
+import { isWindowsPlatform } from "@/lib/platform"
 import type {
   MenuBarWidgetBackdrop,
   MenuBarWidgetStyle,
@@ -21,7 +22,8 @@ export function summarizeBackdrop(backdrop: MenuBarWidgetBackdrop): string {
   if (!backdrop.enabled) return "Off"
   const parts = [backdrop.color === "auto" ? "Auto" : backdrop.color]
   if (backdrop.opacity > 0) parts.push(`${backdrop.opacity}%`)
-  if (backdrop.glass > 0) parts.push(`glass ${backdrop.glass}%`)
+  // Windows has no glass on the taskbar widget, so it is not listed there.
+  if (backdrop.glass > 0 && !isWindowsPlatform()) parts.push(`glass ${backdrop.glass}%`)
   if (backdrop.blur > 0) parts.push(`blur ${backdrop.blur}%`)
   return parts.join(" · ")
 }

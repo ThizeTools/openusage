@@ -8,6 +8,8 @@ use serde::Deserialize;
 use std::sync::Mutex;
 
 #[cfg(windows)]
+mod backdrop;
+#[cfg(windows)]
 mod paint;
 #[cfg(windows)]
 mod win;
@@ -37,7 +39,8 @@ pub struct TaskbarProvider {
     pub items: Vec<TaskbarItem>,
 }
 
-/// macOS: native blur drawn under the widget image (the PNG itself never blurs).
+/// Blur under the widget's background card (the image itself never blurs). macOS: a native blur view;
+/// Windows: the desktop wallpaper behind the widget, blurred in software (taskbar/backdrop.rs).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskbarBackdrop {
@@ -46,6 +49,7 @@ pub struct TaskbarBackdrop {
     /// Corner radius in pt.
     pub radius: f64,
     /// Size of the widget image in pt.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub width_pt: f64,
     pub height_pt: f64,
 }
@@ -70,9 +74,9 @@ pub struct TaskbarPayload {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub menu_bar_image: Option<String>,
-    /// macOS: native blur behind the image; null when the background is off or its blur is 0.
+    /// Blur under the image (macOS and Windows); null when the background is off or its blur is 0.
     #[serde(default)]
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     pub menu_bar_backdrop: Option<TaskbarBackdrop>,
     /// Windows: pre-rendered widget (rendered at 3x); null/absent falls back to the native text layout.
     #[serde(default)]

@@ -15,12 +15,37 @@ pub struct Frame {
     pub w: i32,
     pub h: i32,
     px: Vec<u32>,
+    /// Where the frontend-rendered widget image (its background card) was drawn: x, y, width, height.
+    pub card: Option<(i32, i32, i32, i32)>,
 }
 
 impl Frame {
     fn new(w: i32, h: i32) -> Self {
         // Alpha 1 everywhere so the whole strip receives mouse input.
-        Self { w, h, px: vec![0x0100_0000; (w.max(1) * h.max(1)) as usize] }
+        Self { w, h, px: vec![0x0100_0000; (w.max(1) * h.max(1)) as usize], card: None }
+    }
+
+    /// Draws `sample` (opaque 0x00RRGGBB at frame point x, y) under the background card at `strength`
+    /// (0..=1), clipped to the card's rounded corners; the pixels already drawn stay on top.
+    pub fn underlay_card(&mut self, strength: f64, radius: f64, sample: impl Fn(i32, i32) -> u32) {
+        let Some((cx, cy, cw, card_h)) = self.card else { return };
+        for y in cy.max(0)..(cy + card_h).min(self.h) {
+            for x in cx.max(0)..(cx + cw).min(self.w) {
+                let cover =
+                    round_rect_coverage((x - cx) as f64 + 0.5, (y - cy) as f64 + 0.5, cw as f64, card_h as f64, radius);
+                let a = (strength * cover * 255.0).round().clamp(0.0, 255.0) as u32;
+                if a == 0 {
+                    continue;
+                }
+                let rgb = sample(x, y);
+                let i = (y * self.w + x) as usize;
+                let top = self.px[i];
+                let inv = 255 - ((top >> 24) & 255);
+                let under = |shift: u32| if shift == 24 { a } else { ((rgb >> shift) & 255) * a / 255 };
+                let out = |shift: u32| (((top >> shift) & 255) + under(shift) * inv / 255).min(255);
+                self.px[i] = (out(24) << 24) | (out(16) << 16) | (out(8) << 8) | out(0);
+            }
+        }
     }
 
     fn blend(&mut self, x: i32, y: i32, (r, g, b): Rgb, a: u8) {
@@ -111,6 +136,16 @@ impl Frame {
             }
         }
     }
+}
+
+/// Share (0..=1) of the pixel centered at (x, y) inside a `w`x`h` rectangle with corners of `radius`,
+/// from its signed distance: anti-aliased edges and rounded corners.
+fn round_rect_coverage(x: f64, y: f64, w: f64, h: f64, radius: f64) -> f64 {
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    let qx = (x - w / 2.0).abs() - (w / 2.0 - r);
+    let qy = (y - h / 2.0).abs() - (h / 2.0 - r);
+    let distance = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r;
+    (0.5 - distance).clamp(0.0, 1.0)
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -329,6 +364,7 @@ pub unsafe fn render(payload: Option<&TaskbarPayload>, height: i32, dpi: u32, li
             f.fill_round(px(2), px(4), f.w - px(2), height - px(4), px(4), fg, if light { 20 } else { 26 });
         }
         f.draw_scaled(&pixels, sw, sh, margin, (height - dh) / 2, dw, dh);
+        f.card = Some((margin, (height - dh) / 2, dw, dh));
         return f;
     }
 
@@ -432,6 +468,14 @@ pub unsafe fn present(hwnd: HWND, f: &Frame) {
 mod tests {
     use super::*;
     use crate::taskbar::{TaskbarItem, TaskbarProvider};
+
+    #[test]
+    fn round_rect_coverage_clips_the_corners() {
+        assert_eq!(round_rect_coverage(10.5, 5.5, 20.0, 10.0, 4.0), 1.0);
+        assert_eq!(round_rect_coverage(0.5, 0.5, 20.0, 10.0, 4.0), 0.0);
+        let edge = round_rect_coverage(10.0, 0.0, 20.0, 10.0, 4.0);
+        assert!(edge > 0.0 && edge < 1.0);
+    }
 
     /// Writes target/taskbar-preview-{dark,light}.bmp with sample data.
     /// Run: cargo test taskbar_preview -- --ignored

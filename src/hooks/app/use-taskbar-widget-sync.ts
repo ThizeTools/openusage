@@ -6,6 +6,7 @@ import { useWidgetRows } from "@/hooks/app/use-widget-rows"
 import { getIconMask } from "@/lib/icon-mask"
 import {
   MENU_BAR_METRICS,
+  MENU_BAR_RENDER_SCALE,
   menuBarImageSizePt,
   renderMenuBarWidgetPng,
   renderMenuBarWidgetRgba,
@@ -137,7 +138,13 @@ export function useTaskbarWidgetSync(): void {
             const size = payload.menuBarImage ? menuBarImageSizePt(payload.menuBarImage) : null
             payload.menuBarBackdrop = buildMenuBarBackdrop(backdrop, size, MENU_BAR_METRICS.cardRadius)
           } else {
-            payload.widgetImage = await renderMenuBarWidgetRgba(payload, appearance)
+            const image = await renderMenuBarWidgetRgba(payload, appearance)
+            payload.widgetImage = image
+            // Windows draws the blur under the card natively (the blurred wallpaper behind the taskbar).
+            const size = image
+              ? { width: image.width / MENU_BAR_RENDER_SCALE, height: image.height / MENU_BAR_RENDER_SCALE }
+              : null
+            payload.menuBarBackdrop = buildMenuBarBackdrop(backdrop, size, MENU_BAR_METRICS.cardRadius)
           }
         } catch (error) {
           console.error("Failed to render widget image:", error)

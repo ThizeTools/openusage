@@ -221,13 +221,16 @@ describe("WidgetMetricsSection", () => {
     describe("background controls", () => {
       const controls = () => within(screen.getByTestId("menu-bar-widget-backdrop"))
 
-      it("hides the Blur slider on Windows (no native blur behind the taskbar widget)", async () => {
+      it("hides the Glass slider on Windows and keeps Blur with its taskbar note", async () => {
         platform.windows = true
         renderSection()
         await openSection("Background")
         expect(controls().getByRole("slider", { name: "Opacity" })).toBeInTheDocument()
-        expect(controls().getByRole("slider", { name: "Glass" })).toBeInTheDocument()
-        expect(controls().queryByRole("slider", { name: "Blur" })).toBeNull()
+        expect(controls().queryByRole("slider", { name: "Glass" })).toBeNull()
+        expect(controls().getByRole("slider", { name: "Blur" })).toBeInTheDocument()
+        expect(
+          controls().getByText("Blur of the desktop wallpaper behind the widget; only visible in the taskbar.")
+        ).toBeInTheDocument()
       })
 
       it("are collapsed until the Background section is opened", async () => {

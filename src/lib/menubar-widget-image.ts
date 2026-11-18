@@ -5,6 +5,7 @@ import type {
   MenuBarWidgetTextColors,
   MenuBarWidgetToneModes,
 } from "@/lib/settings"
+import { isWindowsPlatform } from "@/lib/platform"
 import type { TaskbarItem, TaskbarPayload, WidgetRgbaImage } from "@/lib/taskbar-payload"
 
 /** Menu bar widget geometry in logical points (the PNG is shown 22pt tall, see taskbar/mac.rs). */
@@ -478,7 +479,8 @@ export function menuBarPalette(dark: boolean, backdrop: MenuBarWidgetBackdrop): 
 
   const card = hexToRgb(backdropCardColor(dark, backdrop))
   const opacity = backdrop.opacity / 100
-  const g = backdrop.glass / 100
+  // The glass sheen looks wrong on the flat Windows taskbar, so it is never drawn there.
+  const g = isWindowsPlatform() ? 0 : backdrop.glass / 100
   const round = (alpha: number) => Math.round(alpha * 1000) / 1000
   const white = (alpha: number) => rgbCss([255, 255, 255], round(alpha))
 
