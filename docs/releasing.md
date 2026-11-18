@@ -25,12 +25,14 @@ Updates are verified with a signature: the app only accepts files signed by the 
 
 ## Publish a new version
 
+Versions of this fork start at 1.0.0 so tags never collide with the original project's `v0.x` tags that `git fetch upstream` brings in.
+
 ```bash
-bun scripts/release.mjs 0.7.1     # bumps package.json, tauri.conf.json, Cargo.toml, Cargo.lock
+bun scripts/release.mjs 1.0.1     # bumps package.json, tauri.conf.json, Cargo.toml, Cargo.lock
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "Release v0.7.1"
-git tag v0.7.1
-git push && git push origin v0.7.1
+git commit -m "Release v1.0.1"
+git tag v1.0.1
+git push && git push origin v1.0.1
 ```
 
 The `Publish` workflow (`.github/workflows/publish.yml`) builds Windows, Mac Apple Silicon and Mac Intel, creates the
