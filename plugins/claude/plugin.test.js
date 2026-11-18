@@ -176,6 +176,30 @@ describe("claude plugin", () => {
     expect(out.lines).toEqual([
       { type: "badge", label: "Status", text: "Rate limited, retry in ~2m", color: "#f59e0b" },
     ])
+    expect(ctx.host.signalRateLimit).toHaveBeenCalledWith(120)
+  })
+
+  it("signals a rate limit without a wait when the 429 carries no Retry-After", () => {
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "tok-1", refresh_token: "ref-1", expiresAt: Date.now() + HOUR_MS })
+    mockHttp(ctx, { usage: [json(429, {})] })
+
+    const out = plugin.probe(ctx)
+
+    expect(out.lines).toEqual([
+      { type: "badge", label: "Status", text: "Rate limited, try again later", color: "#f59e0b" },
+    ])
+    expect(ctx.host.signalRateLimit).toHaveBeenCalledWith(null)
+  })
+
+  it("does not signal a rate limit on a successful read", () => {
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "tok-1", refresh_token: "ref-1", expiresAt: Date.now() + HOUR_MS })
+    mockHttp(ctx, { usage: [json(200, usageBody)] })
+
+    plugin.probe(ctx)
+
+    expect(ctx.host.signalRateLimit).not.toHaveBeenCalled()
   })
 
   it("asks to sign in again when the refresh token is refused", () => {

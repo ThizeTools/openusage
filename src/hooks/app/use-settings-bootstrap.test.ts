@@ -9,9 +9,7 @@ const {
   invokeMock,
   isAutostartEnabledMock,
   isTauriMock,
-  loadAutoUpdateIntervalMock,
   loadDisplayModeMock,
-  loadGlobalShortcutMock,
   loadMenubarIconStyleMock,
   loadPluginSettingsMock,
   loadResetTimerDisplayModeMock,
@@ -31,9 +29,7 @@ const {
   disableAutostartMock: vi.fn(),
   arePluginSettingsEqualMock: vi.fn(),
   getEnabledPluginIdsMock: vi.fn(),
-  loadAutoUpdateIntervalMock: vi.fn(),
   loadDisplayModeMock: vi.fn(),
-  loadGlobalShortcutMock: vi.fn(),
   loadMenubarIconStyleMock: vi.fn(),
   loadPluginSettingsMock: vi.fn(),
   loadResetTimerDisplayModeMock: vi.fn(),
@@ -60,9 +56,7 @@ vi.mock("@tauri-apps/plugin-autostart", () => ({
 
 vi.mock("@/lib/settings", () => ({
   arePluginSettingsEqual: arePluginSettingsEqualMock,
-  DEFAULT_AUTO_UPDATE_INTERVAL: 15,
   DEFAULT_DISPLAY_MODE: "left",
-  DEFAULT_GLOBAL_SHORTCUT: null,
   DEFAULT_MENUBAR_ICON_STYLE: "provider",
   DEFAULT_PLUGIN_SETTINGS: { order: [], disabled: [] },
   DEFAULT_RESET_TIMER_DISPLAY_MODE: "relative",
@@ -71,9 +65,7 @@ vi.mock("@/lib/settings", () => ({
   DEFAULT_WIDGET_PROVIDER_IDS: null,
   DEFAULT_WIDGET_VISIBLE: false,
   getEnabledPluginIds: getEnabledPluginIdsMock,
-  loadAutoUpdateInterval: loadAutoUpdateIntervalMock,
   loadDisplayMode: loadDisplayModeMock,
-  loadGlobalShortcut: loadGlobalShortcutMock,
   loadMenubarIconStyle: loadMenubarIconStyleMock,
   loadPluginSettings: loadPluginSettingsMock,
   loadResetTimerDisplayMode: loadResetTimerDisplayModeMock,
@@ -93,11 +85,9 @@ function createArgs() {
   return {
     setPluginSettings: vi.fn(),
     setPluginsMeta: vi.fn(),
-    setAutoUpdateInterval: vi.fn(),
     setThemeMode: vi.fn(),
     setDisplayMode: vi.fn(),
     setResetTimerDisplayMode: vi.fn(),
-    setGlobalShortcut: vi.fn(),
     setStartOnLogin: vi.fn(),
     setMenubarIconStyle: vi.fn(),
     setWidgetVisible: vi.fn(),
@@ -105,6 +95,8 @@ function createArgs() {
     setLoadingForPlugins: vi.fn(),
     setErrorForPlugins: vi.fn(),
     startBatch: vi.fn().mockResolvedValue(undefined),
+    hydrateProbeState: vi.fn().mockResolvedValue(undefined),
+    selectDueProviders: vi.fn((ids: string[]) => ids),
   }
 }
 
@@ -117,9 +109,7 @@ describe("useSettingsBootstrap", () => {
     disableAutostartMock.mockReset()
     arePluginSettingsEqualMock.mockReset()
     getEnabledPluginIdsMock.mockReset()
-    loadAutoUpdateIntervalMock.mockReset()
     loadDisplayModeMock.mockReset()
-    loadGlobalShortcutMock.mockReset()
     loadMenubarIconStyleMock.mockReset()
     loadPluginSettingsMock.mockReset()
     loadResetTimerDisplayModeMock.mockReset()
@@ -151,11 +141,9 @@ describe("useSettingsBootstrap", () => {
         : { order: plugins.map((plugin: { id: string }) => plugin.id), disabled: [] }
     )
     arePluginSettingsEqualMock.mockReturnValue(true)
-    loadAutoUpdateIntervalMock.mockResolvedValue(15)
     loadThemeModeMock.mockResolvedValue("dark")
     loadDisplayModeMock.mockResolvedValue("used")
     loadResetTimerDisplayModeMock.mockResolvedValue("relative")
-    loadGlobalShortcutMock.mockResolvedValue("CommandOrControl+Shift+O")
     loadMenubarIconStyleMock.mockResolvedValue("provider")
     loadStartOnLoginMock.mockResolvedValue(true)
     loadWidgetProviderIdsMock.mockResolvedValue(null)
@@ -236,7 +224,7 @@ describe("useSettingsBootstrap", () => {
 
   it("publishes plugin settings before loading non-critical preferences", async () => {
     const args = createArgs()
-    loadAutoUpdateIntervalMock.mockReturnValueOnce(new Promise(() => {}))
+    loadThemeModeMock.mockReturnValueOnce(new Promise(() => {}))
 
     renderHook(() => useSettingsBootstrap(args))
 
@@ -249,7 +237,7 @@ describe("useSettingsBootstrap", () => {
       expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["codex"])
       expect(args.startBatch).toHaveBeenCalledWith(["codex"])
     })
-    expect(args.setAutoUpdateInterval).not.toHaveBeenCalled()
+    expect(args.setThemeMode).not.toHaveBeenCalled()
   })
 
   it("publishes default plugin settings before stored settings load", async () => {
@@ -264,10 +252,64 @@ describe("useSettingsBootstrap", () => {
         order: ["codex"],
         disabled: [],
       })
-      expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["codex"])
-      expect(args.startBatch).toHaveBeenCalledWith(["codex"])
     })
-    expect(loadAutoUpdateIntervalMock).not.toHaveBeenCalled()
+    expect(args.startBatch).not.toHaveBeenCalled()
+    expect(loadThemeModeMock).not.toHaveBeenCalled()
+  })
+
+  it("hydrates the cached state before deciding what to probe at launch", async () => {
+    const args = createArgs()
+    const calls: string[] = []
+    args.hydrateProbeState.mockImplementation(async () => {
+      calls.push("hydrate")
+    })
+    args.selectDueProviders.mockImplementation((ids: string[]) => {
+      calls.push("select")
+      return ids
+    })
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => expect(args.startBatch).toHaveBeenCalledWith(["codex"]))
+    expect(calls).toEqual(["hydrate", "select"])
+    expect(args.selectDueProviders).toHaveBeenCalledWith(["codex"])
+  })
+
+  it("skips providers with a fresh reading at launch and probes the stale ones", async () => {
+    const args = createArgs()
+    getEnabledPluginIdsMock.mockReturnValue(["codex", "claude", "cursor"])
+    // codex was refreshed seconds ago, claude is stale, cursor was never fetched.
+    args.selectDueProviders.mockImplementation((ids: string[]) =>
+      ids.filter((id) => id !== "codex")
+    )
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => expect(args.startBatch).toHaveBeenCalledWith(["claude", "cursor"]))
+    expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["claude", "cursor"])
+    expect(args.startBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not start a probe at launch when every provider is fresh or backed off", async () => {
+    const args = createArgs()
+    args.selectDueProviders.mockReturnValue([])
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => expect(args.setThemeMode).toHaveBeenCalled())
+    expect(args.setLoadingForPlugins).not.toHaveBeenCalled()
+    expect(args.startBatch).not.toHaveBeenCalled()
+  })
+
+  it("still launches when hydrating the cache fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const args = createArgs()
+    args.hydrateProbeState.mockRejectedValue(new Error("cache unreadable"))
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => expect(args.startBatch).toHaveBeenCalledWith(["codex"]))
+    errorSpy.mockRestore()
   })
 
   it("retries transient provider discovery failures", async () => {

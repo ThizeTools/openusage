@@ -1,14 +1,20 @@
-import { ProviderIcon } from "@/components/accounts/provider-icon";
+import { ProvidersList } from "@/components/widget-tab/providers-list";
+import { LayoutHybrid } from "@/components/widget-tab/layout-hybrid";
+import type { WidgetPluginConfig, WidgetProvidersModel, WidgetTabModel } from "@/components/widget-tab/types";
 import { Checkbox } from "@/components/ui/checkbox";
+import { isMacPlatform, widgetSurfaceName } from "@/lib/platform";
 import type { PluginMeta } from "@/lib/plugin-types";
-import type { WidgetProviderIds, WidgetProviderMetrics } from "@/lib/settings";
-import { getDefaultProviderMetrics, getProviderMetricOptions } from "@/lib/widget-rows";
+import {
+  type MenuBarWidgetBackdrop,
+  type MenuBarWidgetColors,
+  type MenuBarWidgetStyle,
+  type MenuBarWidgetTextColors,
+  type MenuBarWidgetToneModes,
+  type WidgetProviderIds,
+  type WidgetProviderMetrics,
+} from "@/lib/settings";
 
-export interface WidgetPluginConfig {
-  id: string;
-  name: string;
-  enabled: boolean;
-}
+export type { WidgetPluginConfig };
 
 interface WidgetMetricsSectionProps {
   plugins: WidgetPluginConfig[];
@@ -19,10 +25,53 @@ interface WidgetMetricsSectionProps {
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void;
   widgetProviderMetrics: WidgetProviderMetrics;
   onWidgetProviderMetricsChange: (value: WidgetProviderMetrics) => void;
+  menuBarWidgetBackdrop: MenuBarWidgetBackdrop;
+  onMenuBarWidgetBackdropChange: (value: MenuBarWidgetBackdrop) => void;
+  menuBarWidgetStyle: MenuBarWidgetStyle;
+  onMenuBarWidgetStyleChange: (value: MenuBarWidgetStyle) => void;
+  menuBarWidgetColors: MenuBarWidgetColors;
+  onMenuBarWidgetColorsChange: (value: MenuBarWidgetColors) => void;
+  menuBarWidgetTextColors: MenuBarWidgetTextColors;
+  onMenuBarWidgetTextColorsChange: (value: MenuBarWidgetTextColors) => void;
+  menuBarWidgetToneModes: MenuBarWidgetToneModes;
+  onMenuBarWidgetToneModesChange: (value: MenuBarWidgetToneModes) => void;
 }
 
-/** Taskbar widget settings: visibility, which providers show, and which metrics each shows. */
-export function WidgetMetricsSection({
+/** Bundles the section's props into the model every macOS layout works with. */
+function buildWidgetTabModel(props: WidgetMetricsSectionProps): WidgetTabModel {
+  return {
+    visible: props.widgetVisible,
+    onVisibleChange: props.onWidgetVisibleChange,
+    style: props.menuBarWidgetStyle,
+    onStyleChange: props.onMenuBarWidgetStyleChange,
+    backdrop: props.menuBarWidgetBackdrop,
+    onBackdropChange: props.onMenuBarWidgetBackdropChange,
+    colors: props.menuBarWidgetColors,
+    onColorsChange: props.onMenuBarWidgetColorsChange,
+    textColors: props.menuBarWidgetTextColors,
+    onTextColorsChange: props.onMenuBarWidgetTextColorsChange,
+    toneModes: props.menuBarWidgetToneModes,
+    onToneModesChange: props.onMenuBarWidgetToneModesChange,
+    plugins: props.plugins,
+    pluginsMeta: props.pluginsMeta,
+    providerIds: props.widgetProviderIds,
+    onProviderIdsChange: props.onWidgetProviderIdsChange,
+    providerMetrics: props.widgetProviderMetrics,
+    onProviderMetricsChange: props.onWidgetProviderMetricsChange,
+  };
+}
+
+/** macOS: the menu bar widget tab. */
+function MenuBarWidgetTab(props: WidgetMetricsSectionProps) {
+  return (
+    <section>
+      <LayoutHybrid model={buildWidgetTabModel(props)} />
+    </section>
+  );
+}
+
+/** Windows / Linux: visibility plus the providers and metrics shown on the taskbar widget. */
+function TaskbarWidgetSection({
   plugins,
   pluginsMeta,
   widgetVisible,
@@ -32,34 +81,20 @@ export function WidgetMetricsSection({
   widgetProviderMetrics,
   onWidgetProviderMetricsChange,
 }: WidgetMetricsSectionProps) {
-  const metaById = new Map(pluginsMeta.map((meta) => [meta.id, meta]));
-  const enabledPlugins = plugins.filter((plugin) => plugin.enabled);
-  const enabledWidgetProviderIds = widgetProviderIds ?? enabledPlugins.map((plugin) => plugin.id);
-  const shownProviderIds = new Set(enabledWidgetProviderIds);
-
-  const getSelectedMetrics = (id: string, meta: PluginMeta): Set<string> =>
-    new Set(widgetProviderMetrics[id] ?? getDefaultProviderMetrics(meta));
-
-  const handleProviderToggle = (pluginId: string, checked: boolean) => {
-    const next = new Set(enabledWidgetProviderIds);
-    if (checked) next.add(pluginId);
-    else next.delete(pluginId);
-    onWidgetProviderIdsChange(plugins.filter((plugin) => next.has(plugin.id)).map((plugin) => plugin.id));
-  };
-
-  const handleMetricToggle = (plugin: WidgetPluginConfig, meta: PluginMeta, label: string, checked: boolean) => {
-    const next = getSelectedMetrics(plugin.id, meta);
-    if (checked) next.add(label);
-    else next.delete(label);
-    const ordered = getProviderMetricOptions(meta).filter((option) => next.has(option));
-    onWidgetProviderMetricsChange({ ...widgetProviderMetrics, [plugin.id]: ordered });
+  const providers: WidgetProvidersModel = {
+    plugins,
+    pluginsMeta,
+    providerIds: widgetProviderIds,
+    onProviderIdsChange: onWidgetProviderIdsChange,
+    providerMetrics: widgetProviderMetrics,
+    onProviderMetricsChange: onWidgetProviderMetricsChange,
   };
 
   return (
     <section>
       <h3 className="text-lg font-semibold mb-0">Taskbar Widget</h3>
       <p className="text-sm text-muted-foreground mb-2">
-        Choose which providers and metrics appear on the taskbar.
+        Choose which providers and metrics appear on the {widgetSurfaceName()}.
       </p>
       <label className="flex items-center gap-2 text-sm select-none text-foreground mb-2">
         <Checkbox
@@ -67,48 +102,14 @@ export function WidgetMetricsSection({
           checked={widgetVisible}
           onCheckedChange={(checked) => onWidgetVisibleChange(checked === true)}
         />
-        Show in taskbar
+        Show in {widgetSurfaceName()}
       </label>
-      <div className="bg-muted/50 rounded-lg p-1 space-y-1">
-        {enabledPlugins.map((plugin) => {
-          const meta = metaById.get(plugin.id);
-          if (!meta) throw new Error(`Missing plugin metadata for widget provider "${plugin.id}"`);
-          const isShown = shownProviderIds.has(plugin.id);
-          const selected = getSelectedMetrics(plugin.id, meta);
-          const options = getProviderMetricOptions(meta);
-          return (
-            <div key={`widget-provider-${plugin.id}`} className="space-y-1">
-              <label className="flex items-center gap-2 px-3 py-2 rounded-md bg-card text-sm select-none">
-                <Checkbox
-                  key={`widget-provider-${plugin.id}-${isShown}`}
-                  checked={isShown}
-                  onCheckedChange={(checked) => handleProviderToggle(plugin.id, checked === true)}
-                />
-                <ProviderIcon iconUrl={meta.iconUrl} brandColor={meta.brandColor} className="size-4" />
-                <span className="flex-1">{plugin.name}</span>
-              </label>
-              {options.length > 0 && (
-                <div className="pl-9 pr-1 space-y-1">
-                  {options.map((label) => (
-                    <label
-                      key={`widget-metric-${plugin.id}-${label}`}
-                      className="flex items-center gap-2 px-2 py-1 rounded-md text-sm select-none text-foreground"
-                    >
-                      <Checkbox
-                        key={`widget-metric-${plugin.id}-${label}-${selected.has(label)}`}
-                        checked={selected.has(label)}
-                        disabled={!isShown}
-                        onCheckedChange={(checked) => handleMetricToggle(plugin, meta, label, checked === true)}
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <ProvidersList model={providers} />
     </section>
   );
+}
+
+/** Widget settings: on macOS the menu bar widget tab, elsewhere the taskbar widget's providers and metrics. */
+export function WidgetMetricsSection(props: WidgetMetricsSectionProps) {
+  return isMacPlatform() ? <MenuBarWidgetTab {...props} /> : <TaskbarWidgetSection {...props} />;
 }

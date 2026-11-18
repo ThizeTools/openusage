@@ -70,9 +70,9 @@ export function OverviewPage({
           showSeparator={index < plugins.length - 1}
           loading={plugin.loading}
           error={plugin.error}
+          notice={plugin.notice}
           lines={plugin.data?.lines ?? []}
           skeletonLines={plugin.meta.lines}
-          lastManualRefreshAt={plugin.lastManualRefreshAt}
           lastUpdatedAt={plugin.lastUpdatedAt}
           onRetry={onRetryPlugin ? () => onRetryPlugin(plugin.meta.id) : undefined}
           scopeFilter="overview"

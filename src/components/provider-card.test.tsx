@@ -6,7 +6,6 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { ProviderCard } from "@/components/provider-card"
 import { groupLinesByType } from "@/lib/group-lines-by-type"
 import { formatResetTooltipText } from "@/lib/reset-tooltip"
-import { REFRESH_COOLDOWN_MS } from "@/lib/settings"
 import { formatFixedPrecisionNumber } from "@/lib/utils"
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -136,37 +135,6 @@ describe("ProviderCard", () => {
 
     expect(screen.getByRole("button", { name: /status/i })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /dashboard/i })).toBeNull()
-  })
-
-  it("shows cooldown hint", () => {
-    vi.useFakeTimers()
-    const now = new Date("2026-02-02T00:00:00.000Z")
-    vi.setSystemTime(now)
-    const lastManualRefreshAt = now.getTime() - (REFRESH_COOLDOWN_MS - 65_000)
-    render(
-      <ProviderCard
-        name="Cooldown"
-        lastManualRefreshAt={lastManualRefreshAt}
-        onRetry={() => {}}
-      />
-    )
-    expect(screen.getByText("Available in 1m 5s")).toBeInTheDocument()
-  })
-
-  it("shows seconds-only cooldown", () => {
-    vi.useFakeTimers()
-    const now = new Date("2026-02-02T00:00:00.000Z")
-    vi.setSystemTime(now)
-    const lastManualRefreshAt = now.getTime() - (REFRESH_COOLDOWN_MS - 30_000)
-    render(
-      <ProviderCard
-        name="Cooldown"
-        lastManualRefreshAt={lastManualRefreshAt}
-        onRetry={() => {}}
-      />
-    )
-    expect(screen.getByText("Available in 30s")).toBeInTheDocument()
-    vi.useRealTimers()
   })
 
   it("formats fixed-precision numbers with trailing zeros", () => {
@@ -717,17 +685,15 @@ describe("ProviderCard", () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
-  it("renders refresh button when cooldown expired", () => {
+  it("keeps refresh button enabled with no cooldown", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T00:00:00.000Z")
     vi.setSystemTime(now)
-    const lastManualRefreshAt = now.getTime() - (REFRESH_COOLDOWN_MS + 1000)
     const onRetry = vi.fn()
     const { container } = render(
       <ProviderCard
         name="Retry"
         onRetry={onRetry}
-        lastManualRefreshAt={lastManualRefreshAt}
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
     )
@@ -736,28 +702,6 @@ describe("ProviderCard", () => {
     expect(iconButton).toBeTruthy()
     iconButton?.click()
     expect(onRetry).toHaveBeenCalledTimes(1)
-    vi.useRealTimers()
-  })
-
-  it("cleans up cooldown timers on unmount", () => {
-    vi.useFakeTimers()
-    const now = new Date("2026-02-02T00:00:00.000Z")
-    vi.setSystemTime(now)
-    const lastManualRefreshAt = now.getTime() - (REFRESH_COOLDOWN_MS - 1000)
-    const clearIntervalSpy = vi.spyOn(global, "clearInterval")
-    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout")
-    const { unmount } = render(
-      <ProviderCard
-        name="Cooldown"
-        lastManualRefreshAt={lastManualRefreshAt}
-        onRetry={() => {}}
-      />
-    )
-    unmount()
-    expect(clearIntervalSpy).toHaveBeenCalled()
-    expect(clearTimeoutSpy).toHaveBeenCalled()
-    clearIntervalSpy.mockRestore()
-    clearTimeoutSpy.mockRestore()
     vi.useRealTimers()
   })
 
@@ -903,6 +847,28 @@ describe("ProviderCard", () => {
     // in both the trigger and the tooltip content via our mocked Tooltip
     expect(screen.getAllByText("Couldn't update data. Try again?").length).toBeGreaterThan(0)
     expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("shows a rate-limit notice as a status, not an error", () => {
+    render(
+      <ProviderCard
+        name="Claude"
+        notice="Claude asked OpenUsage to wait. Retrying at 3:45 PM."
+        lastUpdatedAt={Date.now()}
+        lines={[{ type: "text", label: "Plan", value: "Max" }]}
+      />
+    )
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Claude asked OpenUsage to wait. Retrying at 3:45 PM."
+    )
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(screen.getByText("Plan")).toBeInTheDocument()
+  })
+
+  it("shows no notice line when there is none", () => {
+    render(<ProviderCard name="Claude" lines={[]} />)
+    expect(screen.queryByRole("status")).not.toBeInTheDocument()
   })
 
   it("shows full PluginError when errored without stale data", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { emit } from "@tauri-apps/api/event"
 import {
@@ -12,8 +12,11 @@ import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
 import type { PluginMeta } from "@/lib/plugin-types"
 import { reloadPluginList } from "@/lib/provider-discovery"
 import {
-  DEFAULT_AUTO_UPDATE_INTERVAL,
-  DEFAULT_GLOBAL_SHORTCUT,
+  DEFAULT_MENU_BAR_WIDGET_BACKDROP,
+  DEFAULT_MENU_BAR_WIDGET_COLORS,
+  DEFAULT_MENU_BAR_WIDGET_STYLE,
+  DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS,
+  DEFAULT_MENU_BAR_WIDGET_TONE_MODES,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_STATS_SHORTCUT,
@@ -21,8 +24,11 @@ import {
   DEFAULT_WIDGET_PROVIDER_IDS,
   DEFAULT_WIDGET_PROVIDER_METRICS,
   DEFAULT_WIDGET_VISIBLE,
-  loadAutoUpdateInterval,
-  loadGlobalShortcut,
+  loadMenuBarWidgetBackdrop,
+  loadMenuBarWidgetColors,
+  loadMenuBarWidgetStyle,
+  loadMenuBarWidgetTextColors,
+  loadMenuBarWidgetToneModes,
   loadPluginSettings,
   loadResetTimerDisplayMode,
   loadStartOnLogin,
@@ -32,26 +38,40 @@ import {
   loadWidgetProviderMetrics,
   loadWidgetVisible,
   normalizePluginSettings,
+  parseMenuBarWidgetBackdrop,
+  parseMenuBarWidgetColors,
+  parseMenuBarWidgetStyle,
+  parseMenuBarWidgetTextColors,
+  parseMenuBarWidgetToneModes,
   parseWidgetProviderMetrics,
   savePluginSettings,
-  saveAutoUpdateInterval,
-  saveGlobalShortcut,
+  saveMenuBarWidgetBackdrop,
+  saveMenuBarWidgetColors,
+  saveMenuBarWidgetStyle,
+  saveMenuBarWidgetTextColors,
+  saveMenuBarWidgetToneModes,
   saveResetTimerDisplayMode,
   saveStartOnLogin,
   saveStatsShortcut,
   saveThemeMode,
   saveWidgetProviderIds,
   saveWidgetProviderMetrics,
-  SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT,
   SETTINGS_PLUGINS_CHANGED_EVENT,
-  type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type PluginSettings,
   type ResetTimerDisplayMode,
   type ThemeMode,
+  type MenuBarWidgetBackdrop,
+  type MenuBarWidgetColors,
+  type MenuBarWidgetStyle,
+  type MenuBarWidgetTextColors,
+  type MenuBarWidgetToneModes,
   type WidgetProviderIds,
   type WidgetProviderMetrics,
 } from "@/lib/settings"
+
+/** Delay before a changed background (slider drags) is written to the store. */
+const BACKDROP_SAVE_DEBOUNCE_MS = 150
 
 /**
  * Self-contained settings state for the dedicated Settings window. It reads from
@@ -61,16 +81,24 @@ import {
 export function useSettingsWindow() {
   const [pluginsMeta, setPluginsMeta] = useState<PluginMeta[]>([])
   const [pluginSettings, setPluginSettings] = useState<PluginSettings | null>(null)
-  const [autoUpdateInterval, setAutoUpdateInterval] = useState<AutoUpdateIntervalMinutes>(DEFAULT_AUTO_UPDATE_INTERVAL)
   const [themeMode, setThemeMode] = useState<ThemeMode>(DEFAULT_THEME_MODE)
   const [resetTimerDisplayMode, setResetTimerDisplayMode] = useState<ResetTimerDisplayMode>(DEFAULT_RESET_TIMER_DISPLAY_MODE)
-  const [globalShortcut, setGlobalShortcut] = useState<GlobalShortcut>(DEFAULT_GLOBAL_SHORTCUT)
   const [statsShortcut, setStatsShortcut] = useState<GlobalShortcut>(DEFAULT_STATS_SHORTCUT)
   const [startOnLogin, setStartOnLogin] = useState<boolean>(DEFAULT_START_ON_LOGIN)
   const [widgetVisible, setWidgetVisible] = useState<boolean>(DEFAULT_WIDGET_VISIBLE)
   const [widgetProviderIds, setWidgetProviderIds] = useState<WidgetProviderIds>(DEFAULT_WIDGET_PROVIDER_IDS)
   const [widgetProviderMetrics, setWidgetProviderMetrics] =
     useState<WidgetProviderMetrics>(DEFAULT_WIDGET_PROVIDER_METRICS)
+  const [menuBarWidgetBackdrop, setMenuBarWidgetBackdrop] =
+    useState<MenuBarWidgetBackdrop>(DEFAULT_MENU_BAR_WIDGET_BACKDROP)
+  const [menuBarWidgetStyle, setMenuBarWidgetStyle] =
+    useState<MenuBarWidgetStyle>(DEFAULT_MENU_BAR_WIDGET_STYLE)
+  const [menuBarWidgetColors, setMenuBarWidgetColors] =
+    useState<MenuBarWidgetColors>(DEFAULT_MENU_BAR_WIDGET_COLORS)
+  const [menuBarWidgetTextColors, setMenuBarWidgetTextColors] =
+    useState<MenuBarWidgetTextColors>(DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS)
+  const [menuBarWidgetToneModes, setMenuBarWidgetToneModes] =
+    useState<MenuBarWidgetToneModes>(DEFAULT_MENU_BAR_WIDGET_TONE_MODES)
 
   useEffect(() => {
     if (!isTauri()) return
@@ -81,31 +109,38 @@ export function useSettingsWindow() {
         if (cancelled) return
         setPluginsMeta(meta)
         const [
-          stored, interval, theme, resetTimer, shortcut, stats,
-          login, visible, providers, providerMetrics,
+          stored, theme, resetTimer, stats,
+          login, visible, providers, providerMetrics, backdrop, widgetStyle, widgetColors, widgetTextColors,
+          widgetToneModes,
         ] = await Promise.all([
           loadPluginSettings(),
-          loadAutoUpdateInterval(),
           loadThemeMode(),
           loadResetTimerDisplayMode(),
-          loadGlobalShortcut(),
           loadStatsShortcut(),
           loadStartOnLogin(),
           loadWidgetVisible(),
           loadWidgetProviderIds(),
           loadWidgetProviderMetrics(),
+          loadMenuBarWidgetBackdrop(),
+          loadMenuBarWidgetStyle(),
+          loadMenuBarWidgetColors(),
+          loadMenuBarWidgetTextColors(),
+          loadMenuBarWidgetToneModes(),
         ])
         if (cancelled) return
         setPluginSettings(normalizePluginSettings(stored, meta))
-        setAutoUpdateInterval(interval)
         setThemeMode(theme)
         setResetTimerDisplayMode(resetTimer)
-        setGlobalShortcut(shortcut)
         setStatsShortcut(stats)
         setStartOnLogin(login)
         setWidgetVisible(visible)
         setWidgetProviderIds(providers)
         setWidgetProviderMetrics(providerMetrics)
+        setMenuBarWidgetBackdrop(backdrop)
+        setMenuBarWidgetStyle(widgetStyle)
+        setMenuBarWidgetColors(widgetColors)
+        setMenuBarWidgetTextColors(widgetTextColors)
+        setMenuBarWidgetToneModes(widgetToneModes)
       } catch (error) {
         console.error("Failed to bootstrap settings window:", error)
       }
@@ -135,6 +170,23 @@ export function useSettingsWindow() {
       })
       await subscribe<unknown>("widgetProviderMetrics", (value) => {
         setWidgetProviderMetrics(parseWidgetProviderMetrics(value))
+      })
+      await subscribe<unknown>("menuBarWidgetBackdrop", (value) => {
+        const parsed = parseMenuBarWidgetBackdrop(value)
+        if (parsed) setMenuBarWidgetBackdrop(parsed)
+      })
+      await subscribe<unknown>("menuBarWidgetStyle", (value) => {
+        const parsed = parseMenuBarWidgetStyle(value)
+        if (parsed) setMenuBarWidgetStyle(parsed)
+      })
+      await subscribe<unknown>("menuBarWidgetColors", (value) => {
+        setMenuBarWidgetColors(parseMenuBarWidgetColors(value))
+      })
+      await subscribe<unknown>("menuBarWidgetTextColors", (value) => {
+        setMenuBarWidgetTextColors(parseMenuBarWidgetTextColors(value))
+      })
+      await subscribe<unknown>("menuBarWidgetToneModes", (value) => {
+        setMenuBarWidgetToneModes(parseMenuBarWidgetToneModes(value))
       })
       await subscribe<PluginSettings>("plugins", (value) => {
         setPluginsMeta((meta) => {
@@ -199,16 +251,6 @@ export function useSettingsWindow() {
     })
   }, [persistPluginSettings])
 
-  const handleAutoUpdateIntervalChange = useCallback((value: AutoUpdateIntervalMinutes) => {
-    setAutoUpdateInterval(value)
-    void saveAutoUpdateInterval(value).catch((error) => console.error("Failed to save interval:", error))
-    if (isTauri()) {
-      void emit(SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT, value).catch((error) =>
-        console.error("Failed to notify auto-update interval change:", error)
-      )
-    }
-  }, [])
-
   const handleThemeModeChange = useCallback((value: ThemeMode) => {
     setThemeMode(value)
     void saveThemeMode(value).catch((error) => console.error("Failed to save theme:", error))
@@ -217,16 +259,6 @@ export function useSettingsWindow() {
   const handleResetTimerDisplayModeChange = useCallback((value: ResetTimerDisplayMode) => {
     setResetTimerDisplayMode(value)
     void saveResetTimerDisplayMode(value).catch((error) => console.error("Failed to save reset timer:", error))
-  }, [])
-
-  const handleGlobalShortcutChange = useCallback((value: GlobalShortcut) => {
-    setGlobalShortcut(value)
-    void saveGlobalShortcut(value).catch((error) => console.error("Failed to save widget shortcut:", error))
-    if (isTauri()) {
-      void invoke("update_global_shortcut", { shortcut: value }).catch((error) =>
-        console.error("Failed to update widget shortcut:", error)
-      )
-    }
   }, [])
 
   const handleStatsShortcutChange = useCallback((value: GlobalShortcut) => {
@@ -274,6 +306,62 @@ export function useSettingsWindow() {
     )
   }, [])
 
+  // Sliders fire on every step: the UI state is immediate, the store write waits for the last change.
+  const backdropSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingBackdropRef = useRef<MenuBarWidgetBackdrop | null>(null)
+  const flushBackdropSave = useCallback(() => {
+    if (backdropSaveTimerRef.current !== null) {
+      clearTimeout(backdropSaveTimerRef.current)
+      backdropSaveTimerRef.current = null
+    }
+    const pending = pendingBackdropRef.current
+    pendingBackdropRef.current = null
+    if (pending) {
+      void saveMenuBarWidgetBackdrop(pending).catch((error) =>
+        console.error("Failed to save menu bar widget background:", error)
+      )
+    }
+  }, [])
+  useEffect(() => flushBackdropSave, [flushBackdropSave])
+
+  const handleMenuBarWidgetBackdropChange = useCallback(
+    (value: MenuBarWidgetBackdrop) => {
+      setMenuBarWidgetBackdrop(value)
+      pendingBackdropRef.current = value
+      if (backdropSaveTimerRef.current !== null) clearTimeout(backdropSaveTimerRef.current)
+      backdropSaveTimerRef.current = setTimeout(flushBackdropSave, BACKDROP_SAVE_DEBOUNCE_MS)
+    },
+    [flushBackdropSave]
+  )
+
+  const handleMenuBarWidgetStyleChange = useCallback((value: MenuBarWidgetStyle) => {
+    setMenuBarWidgetStyle(value)
+    void saveMenuBarWidgetStyle(value).catch((error) =>
+      console.error("Failed to save menu bar widget style:", error)
+    )
+  }, [])
+
+  const handleMenuBarWidgetColorsChange = useCallback((value: MenuBarWidgetColors) => {
+    setMenuBarWidgetColors(value)
+    void saveMenuBarWidgetColors(value).catch((error) =>
+      console.error("Failed to save menu bar widget colors:", error)
+    )
+  }, [])
+
+  const handleMenuBarWidgetTextColorsChange = useCallback((value: MenuBarWidgetTextColors) => {
+    setMenuBarWidgetTextColors(value)
+    void saveMenuBarWidgetTextColors(value).catch((error) =>
+      console.error("Failed to save menu bar widget text colors:", error)
+    )
+  }, [])
+
+  const handleMenuBarWidgetToneModesChange = useCallback((value: MenuBarWidgetToneModes) => {
+    setMenuBarWidgetToneModes(value)
+    void saveMenuBarWidgetToneModes(value).catch((error) =>
+      console.error("Failed to save menu bar widget tone modes:", error)
+    )
+  }, [])
+
   const plugins = useMemo(() => {
     if (!pluginSettings) return []
     const disabled = new Set(pluginSettings.disabled)
@@ -289,25 +377,31 @@ export function useSettingsWindow() {
     plugins,
     pluginsMeta,
     ready: pluginSettings !== null,
-    autoUpdateInterval,
     themeMode,
     resetTimerDisplayMode,
-    globalShortcut,
     statsShortcut,
     startOnLogin,
     widgetVisible,
     widgetProviderIds,
     widgetProviderMetrics,
+    menuBarWidgetBackdrop,
+    menuBarWidgetStyle,
+    menuBarWidgetColors,
+    menuBarWidgetTextColors,
+    menuBarWidgetToneModes,
     handleToggle,
     handleReorder,
-    handleAutoUpdateIntervalChange,
     handleThemeModeChange,
     handleResetTimerDisplayModeChange,
-    handleGlobalShortcutChange,
     handleStatsShortcutChange,
     handleStartOnLoginChange,
     handleWidgetVisibleChange,
     handleWidgetProviderIdsChange,
     handleWidgetProviderMetricsChange,
+    handleMenuBarWidgetBackdropChange,
+    handleMenuBarWidgetStyleChange,
+    handleMenuBarWidgetColorsChange,
+    handleMenuBarWidgetTextColorsChange,
+    handleMenuBarWidgetToneModesChange,
   }
 }

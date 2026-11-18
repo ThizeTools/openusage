@@ -1,5 +1,6 @@
-//! Account metadata in `accounts.json`; secrets (token JSON) encrypted with
-//! DPAPI in `accounts/<id>.bin`. Credential Manager is not used: its 2.5 KB
+//! Account metadata in `accounts.json`; secrets (token JSON) encrypted in
+//! `accounts/<id>.bin`: DPAPI on Windows, AES-256-GCM on macOS with the key
+//! kept in the Keychain. Credential Manager is not used on Windows: its 2.5 KB
 //! blob limit is too small for OAuth responses with JWTs.
 
 use serde::{Deserialize, Serialize};
@@ -116,7 +117,7 @@ pub fn rename(id: &str, label: &str, by_user: bool) -> Result<bool, String> {
 
 pub fn read_secret(id: &str) -> Result<String, String> {
     let bytes = std::fs::read(secret_path(id)?).map_err(|e| format!("account secret missing: {e}"))?;
-    let plain = dpapi(&bytes, false)?;
+    let plain = protect(&bytes, false)?;
     String::from_utf8(plain).map_err(|e| e.to_string())
 }
 
@@ -126,11 +127,11 @@ pub fn write_secret(id: &str, json: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(path, dpapi(json.as_bytes(), true)?).map_err(|e| format!("failed to write account secret: {e}"))
+    std::fs::write(path, protect(json.as_bytes(), true)?).map_err(|e| format!("failed to write account secret: {e}"))
 }
 
 #[cfg(windows)]
-fn dpapi(data: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
+fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
     use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData};
@@ -151,7 +152,113 @@ fn dpapi(data: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
     }
 }
 
-#[cfg(not(windows))]
-fn dpapi(_data: &[u8], _encrypt: bool) -> Result<Vec<u8>, String> {
-    Err("in-app accounts are only supported on Windows".to_string())
+#[cfg(target_os = "macos")]
+const KEYCHAIN_SERVICE: &str = "com.sunstory.openusage";
+#[cfg(target_os = "macos")]
+const KEYCHAIN_ACCOUNT: &str = "accounts-master-key";
+#[cfg(target_os = "macos")]
+const NONCE_LEN: usize = 12;
+/// errSecItemNotFound
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+/// Encrypts `plain` with AES-256-GCM; output is nonce (12 bytes) + ciphertext.
+#[cfg(target_os = "macos")]
+fn seal(key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
+    use aes_gcm::aead::{Aead, KeyInit, OsRng, rand_core::RngCore};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plain)
+        .map_err(|_| "failed to encrypt account secret".to_string())?;
+    let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+#[cfg(target_os = "macos")]
+fn open(key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, String> {
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    if sealed.len() < NONCE_LEN {
+        return Err("account secret is corrupted (too short)".to_string());
+    }
+    let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|_| "failed to decrypt account secret (wrong key or corrupted file)".to_string())
+}
+
+/// Master key from the Keychain (generated and stored on first use), cached
+/// for the process so the Keychain is hit once.
+#[cfg(target_os = "macos")]
+fn master_key() -> Result<[u8; 32], String> {
+    use aes_gcm::aead::{OsRng, rand_core::RngCore};
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+
+    static KEY: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+    let mut cached = KEY.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(key) = *cached {
+        return Ok(key);
+    }
+    let key = match get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
+        Ok(bytes) => {
+            let decoded = STANDARD
+                .decode(String::from_utf8_lossy(&bytes).trim())
+                .map_err(|e| format!("accounts master key in Keychain is invalid: {e}"))?;
+            <[u8; 32]>::try_from(decoded.as_slice())
+                .map_err(|_| "accounts master key in Keychain has the wrong length".to_string())?
+        }
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+            let mut key = [0u8; 32];
+            OsRng.fill_bytes(&mut key);
+            set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, STANDARD.encode(key).as_bytes())
+                .map_err(|e| format!("failed to store accounts master key in Keychain: {e}"))?;
+            key
+        }
+        Err(error) => return Err(format!("failed to read accounts master key from Keychain: {error}")),
+    };
+    *cached = Some(key);
+    Ok(key)
+}
+
+#[cfg(target_os = "macos")]
+fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
+    let key = master_key()?;
+    if encrypt { seal(&key, data) } else { open(&key, data) }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn protect(_data: &[u8], _encrypt: bool) -> Result<Vec<u8>, String> {
+    Err("in-app accounts are only supported on Windows and macOS".to_string())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seal_open_round_trip() {
+        let key = [7u8; 32];
+        let sealed = seal(&key, b"{\"token\":\"abc\"}").unwrap();
+        assert!(sealed.len() > NONCE_LEN);
+        assert_eq!(open(&key, &sealed).unwrap(), b"{\"token\":\"abc\"}");
+    }
+
+    #[test]
+    fn tampered_or_short_data_fails() {
+        let key = [7u8; 32];
+        let mut sealed = seal(&key, b"secret").unwrap();
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0xff;
+        assert!(open(&key, &sealed).is_err());
+        assert!(open(&key, &[0u8; 5]).is_err());
+        assert!(open(&[8u8; 32], &seal(&key, b"secret").unwrap()).is_err());
+    }
 }

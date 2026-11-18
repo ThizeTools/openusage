@@ -69,18 +69,6 @@ export function useTrayIcon({
       }
 
       const tray = trayRef.current
-      const maybeSetTitle = tray
-        ? (tray as TrayIcon & { setTitle?: (value: string) => Promise<void> }).setTitle
-        : undefined
-      const setTitleFn =
-        tray && typeof maybeSetTitle === "function" ? (value: string) => maybeSetTitle.call(tray, value) : null
-      const setTrayTitle = (title: string) => {
-        if (setTitleFn) {
-          return setTitleFn(title)
-        }
-        return Promise.resolve()
-      }
-
       const maybeSetTooltip = tray
         ? (tray as TrayIcon & { setTooltip?: (value: string) => Promise<void> }).setTooltip
         : undefined
@@ -93,10 +81,10 @@ export function useTrayIcon({
         return Promise.resolve()
       }
 
-      // Icon itself is static (set once in Rust to the app/taskbar icon);
-      // only title and tooltip are updated from the frontend.
+      // Icon and title are owned by Rust (the title is the macOS menu bar
+      // widget); only the tooltip is updated from the frontend.
       const updateStaticTray = (tooltip: string) => {
-        Promise.all([setTrayTitle(""), setTrayTooltip(tooltip)])
+        setTrayTooltip(tooltip)
           .catch((e) => {
             console.error("Failed to update tray icon:", e)
           })

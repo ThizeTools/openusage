@@ -227,6 +227,30 @@ const resp = ctx.host.http.request({
 })
 ```
 
+## Rate Limits
+
+```typescript
+host.signalRateLimit(retryAfterSeconds?: number | null): void
+```
+
+Tells OpenUsage the provider asked it to slow down (HTTP 429 or equivalent). Call it whenever a response means "wait", then either throw or return lines as usual.
+
+OpenUsage then backs this provider off like the native app does: no automatic refresh until the wait is over, and a manual refresh does not override it. The card shows "<Name> asked OpenUsage to wait. Retrying at <time>." instead of an error.
+
+- `retryAfterSeconds` is the provider's `Retry-After` in seconds. Pass `null` (or omit it) when the response has none; OpenUsage then waits 5 minutes, doubling on each consecutive failure up to 1 hour. Waits above 1 hour are capped at 1 hour, and non-positive or non-numeric values count as "no wait".
+- Returned lines are kept as-is, so a plugin can still show its own badge (for example `Rate limited, retry in ~2m`). A rate-limited probe is not cached for the local HTTP API.
+- Throwing a message that mentions `HTTP 429`, `rate limit` or `too many requests` is classified as a rate limit too, but without a wait. Prefer calling `signalRateLimit` so the `Retry-After` is honoured.
+
+### Failure classification
+
+When a probe throws, OpenUsage reports a structured `failure` next to the error badge so the scheduler can pick the right backoff:
+
+| Kind          | When                                                                                          | Backoff                                |
+| ------------- | --------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `rateLimited` | `signalRateLimit` was called, or the message mentions HTTP 429 / rate limit                    | `Retry-After`, else 5 min doubling     |
+| `unreachable` | The last `host.http.request` failed before any response (connect, DNS, timeout), or the message says "check your connection" | 5 min, failure count unchanged |
+| `refused`     | Anything else (bad credentials, HTTP errors, plugin errors, probe timeout)                    | 5 min doubling, up to 1 hour           |
+
 ## Keychain (macOS only)
 
 ```typescript

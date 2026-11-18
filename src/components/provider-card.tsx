@@ -1,5 +1,5 @@
 import { Fragment, useMemo } from "react"
-import { AlertCircle, ExternalLink, Hourglass, RefreshCw } from "lucide-react"
+import { AlertCircle, Clock, ExternalLink, RefreshCw } from "lucide-react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -10,7 +10,7 @@ import { SkeletonLines } from "@/components/skeleton-lines"
 import { UsageSparkline } from "@/components/usage-sparkline"
 import { PluginError } from "@/components/plugin-error"
 import { useNowTicker } from "@/hooks/use-now-ticker"
-import { REFRESH_COOLDOWN_MS, type ResetTimerDisplayMode } from "@/lib/settings"
+import { type ResetTimerDisplayMode } from "@/lib/settings"
 import type { ManifestLine, MetricLine, PluginLink } from "@/lib/plugin-types"
 import { groupLinesByType } from "@/lib/group-lines-by-type"
 import { clamp01, formatCountNumber, formatFixedPrecisionNumber } from "@/lib/utils"
@@ -25,15 +25,19 @@ interface ProviderCardProps {
   showSeparator?: boolean
   loading?: boolean
   error?: string | null
+  /** Informational, not an error: e.g. the provider asked OpenUsage to wait. */
+  notice?: string | null
   lines?: MetricLine[]
   skeletonLines?: ManifestLine[]
-  lastManualRefreshAt?: number | null
   lastUpdatedAt?: number | null
   onRetry?: () => void
   scopeFilter?: "overview" | "all"
   resetTimerDisplayMode?: ResetTimerDisplayMode
   onResetTimerDisplayModeToggle?: () => void
 }
+
+/** Same amber the plugins use for their own rate-limit badge. */
+const NOTICE_COLOR = "#f59e0b"
 
 const PACE_VISUALS: Record<PaceStatus, { dotClass: string }> = {
   ahead: { dotClass: "bg-green-500" },
@@ -113,21 +117,15 @@ export function ProviderCard({
   showSeparator = true,
   loading = false,
   error = null,
+  notice = null,
   lines = [],
   skeletonLines = [],
-  lastManualRefreshAt,
   lastUpdatedAt,
   onRetry,
   scopeFilter = "all",
   resetTimerDisplayMode = "relative",
   onResetTimerDisplayModeToggle,
 }: ProviderCardProps) {
-  const cooldownRemainingMs = useMemo(() => {
-    if (!lastManualRefreshAt) return 0
-    const remaining = REFRESH_COOLDOWN_MS - (Date.now() - lastManualRefreshAt)
-    return remaining > 0 ? remaining : 0
-  }, [lastManualRefreshAt])
-
   // Filter lines based on scope - match by label since runtime lines can differ from manifest
   const overviewLabels = new Set(
     skeletonLines
@@ -150,17 +148,10 @@ export function ProviderCard({
   const hasStaleData = lastUpdatedAt != null || filteredLines.length > 0
   const isRefreshingWithData = loading && hasStaleData
 
-  const tickerIntervalMs = cooldownRemainingMs > 0 ? 1000 : 30_000
-
   const now = useNowTicker({
-    enabled: cooldownRemainingMs > 0 || hasResetCountdown,
-    intervalMs: tickerIntervalMs,
-    stopAfterMs: cooldownRemainingMs > 0 && !hasResetCountdown ? cooldownRemainingMs : null,
+    enabled: hasResetCountdown,
+    intervalMs: 30_000,
   })
-
-  const inCooldown = lastManualRefreshAt
-    ? now - lastManualRefreshAt < REFRESH_COOLDOWN_MS
-    : false
 
   const visibleLinks = useMemo(
     () =>
@@ -177,20 +168,6 @@ export function ProviderCard({
         ),
     [links]
   )
-
-  // Format remaining cooldown time as "Xm Ys"
-  const formatRemainingTime = () => {
-    if (!lastManualRefreshAt) return ""
-    const remainingMs = REFRESH_COOLDOWN_MS - (now - lastManualRefreshAt)
-    if (remainingMs <= 0) return ""
-    const totalSeconds = Math.ceil(remainingMs / 1000)
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = totalSeconds % 60
-    if (minutes > 0) {
-      return `Available in ${minutes}m ${seconds}s`
-    }
-    return `Available in ${seconds}s`
-  }
 
   return (
     <div>
@@ -209,28 +186,6 @@ export function ProviderCard({
                 >
                   <RefreshCw className="h-3 w-3 animate-spin" />
                 </Button>
-              ) : inCooldown ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    className="ml-1"
-                    render={(props) => (
-                      <span {...props} className={props.className}>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          className="pointer-events-none opacity-50"
-                          style={{ transform: "translateZ(0)", backfaceVisibility: "hidden" }}
-                          tabIndex={-1}
-                        >
-                          <Hourglass className="h-3 w-3" />
-                        </Button>
-                      </span>
-                    )}
-                  />
-                  <TooltipContent side="top">
-                    {formatRemainingTime()}
-                  </TooltipContent>
-                </Tooltip>
               ) : (
                 <Tooltip>
                   <TooltipTrigger
@@ -308,6 +263,17 @@ export function ProviderCard({
               {error}
             </TooltipContent>
           </Tooltip>
+        )}
+
+        {notice && (
+          <div
+            role="status"
+            className="flex items-center gap-1.5 mb-2 text-xs"
+            style={{ color: NOTICE_COLOR }}
+          >
+            <Clock className="h-3 w-3 flex-shrink-0" />
+            <span>{notice}</span>
+          </div>
         )}
 
         {loading && !hasStaleData && !error && (

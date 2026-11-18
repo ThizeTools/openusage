@@ -65,14 +65,10 @@ const defaultProps = {
   ],
   onReorder: vi.fn(),
   onToggle: vi.fn(),
-  autoUpdateInterval: 15 as const,
-  onAutoUpdateIntervalChange: vi.fn(),
   themeMode: "system" as const,
   onThemeModeChange: vi.fn(),
   resetTimerDisplayMode: "relative" as const,
   onResetTimerDisplayModeChange: vi.fn(),
-  globalShortcut: null,
-  onGlobalShortcutChange: vi.fn(),
   statsShortcut: null,
   onStatsShortcutChange: vi.fn(),
   startOnLogin: false,
@@ -83,6 +79,16 @@ const defaultProps = {
   onWidgetProviderIdsChange: vi.fn(),
   widgetProviderMetrics: {},
   onWidgetProviderMetricsChange: vi.fn(),
+  menuBarWidgetBackdrop: { enabled: true, color: "auto" as const, opacity: 60, glass: 40, blur: 50 },
+  onMenuBarWidgetBackdropChange: vi.fn(),
+  menuBarWidgetStyle: "stacked",
+  onMenuBarWidgetStyleChange: vi.fn(),
+  menuBarWidgetColors: {},
+  onMenuBarWidgetColorsChange: vi.fn(),
+  menuBarWidgetTextColors: { label: "mono", used: "color", expected: "color" },
+  onMenuBarWidgetTextColorsChange: vi.fn(),
+  menuBarWidgetToneModes: { ahead: "color", onTrack: "color", behind: "color" },
+  onMenuBarWidgetToneModesChange: vi.fn(),
 }
 
 afterEach(() => {
@@ -141,21 +147,18 @@ describe("SettingsPage", () => {
     expect(onReorder).not.toHaveBeenCalled()
   })
 
-  it("updates auto-update interval", async () => {
-    const onAutoUpdateIntervalChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onAutoUpdateIntervalChange={onAutoUpdateIntervalChange}
-      />
-    )
-    await userEvent.click(screen.getByText("30 min"))
-    expect(onAutoUpdateIntervalChange).toHaveBeenCalledWith(30)
-  })
-
-  it("shows auto-update helper text", () => {
+  it("shows the fixed auto refresh schedule without interval buttons", () => {
     render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("How obsessive are you")).toBeInTheDocument()
+    expect(screen.getByText("Auto Refresh")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Every 5 minutes. Providers that rate-limit OpenUsage are retried later automatically; use Refresh to update now."
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("radiogroup", { name: "Auto-update interval" })).not.toBeInTheDocument()
+    for (const label of ["1 min", "5 min", "15 min", "30 min"]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument()
+    }
   })
 
   it("renders app theme section with theme options", () => {
@@ -252,11 +255,11 @@ describe("SettingsPage", () => {
     expect(onWidgetProviderIdsChange).toHaveBeenCalledWith(["a", "b"])
   })
 
-  it("renders the stats shortcut section", async () => {
+  it("renders the global shortcut section", async () => {
     render(<SettingsPage {...defaultProps} />)
     await openTab("Shortcuts")
-    expect(screen.getByText("Stats Shortcut")).toBeInTheDocument()
-    expect(screen.getByText("Show or hide the stats popup")).toBeInTheDocument()
+    expect(screen.getByText("Global Shortcut")).toBeInTheDocument()
+    expect(screen.getByText("Show or hide the stats panel from anywhere")).toBeInTheDocument()
   })
 
   it("shows each enabled provider's metrics in the widget tab", async () => {

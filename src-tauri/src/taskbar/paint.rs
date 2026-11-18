@@ -370,6 +370,8 @@ mod tests {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&mask);
         let payload = TaskbarPayload {
             tooltip: String::new(),
+            menu_bar_image: None,
+            menu_bar_backdrop: None,
             providers: vec![
                 TaskbarProvider {
                     brand_color: Some("#DE7356".into()),

@@ -1,13 +1,18 @@
 import { useCallback } from "react"
 import type { MutableRefObject } from "react"
-import { REFRESH_COOLDOWN_MS, getEnabledPluginIds, type PluginSettings } from "@/lib/settings"
+import { getEnabledPluginIds, type PluginSettings } from "@/lib/settings"
+import {
+  selectProvidersToProbe,
+  type RefreshBackoff,
+  type RefreshSource,
+} from "@/lib/refresh-policy"
 import type { PluginState } from "@/hooks/app/types"
 
 type UseProbeRefreshActionsArgs = {
   pluginSettings: PluginSettings | null
   pluginStatesRef: MutableRefObject<Record<string, PluginState>>
   manualRefreshIdsRef: MutableRefObject<Set<string>>
-  resetAutoUpdateSchedule: () => void
+  backoffsRef: MutableRefObject<Record<string, RefreshBackoff>>
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
@@ -17,7 +22,7 @@ export function useProbeRefreshActions({
   pluginSettings,
   pluginStatesRef,
   manualRefreshIdsRef,
-  resetAutoUpdateSchedule,
+  backoffsRef,
   setLoadingForPlugins,
   setErrorForPlugins,
   startBatch,
@@ -40,39 +45,37 @@ export function useProbeRefreshActions({
     [manualRefreshIdsRef, setLoadingForPlugins, setErrorForPlugins, startBatch]
   )
 
+  // A manual refresh is forced: it skips the freshness check and any backoff the provider did
+  // not ask for, but never interrupts a probe that is already running.
+  const selectForced = useCallback(
+    (ids: string[]) => {
+      const source: RefreshSource = {
+        lastSuccessAt: (id) => pluginStatesRef.current[id]?.lastUpdatedAt,
+        backoff: (id) => backoffsRef.current[id],
+        inFlight: (id) =>
+          Boolean(pluginStatesRef.current[id]?.loading) ||
+          manualRefreshIdsRef.current.has(id),
+      }
+      return selectProvidersToProbe(ids, Date.now(), true, source)
+    },
+    [backoffsRef, manualRefreshIdsRef, pluginStatesRef]
+  )
+
   const handleRetryPlugin = useCallback(
     (id: string) => {
-      const currentState = pluginStatesRef.current[id]
-      if (currentState?.loading) return
-      if (manualRefreshIdsRef.current.has(id)) return
-      const lastManualRefreshAt = currentState?.lastManualRefreshAt
-      if (lastManualRefreshAt && Date.now() - lastManualRefreshAt < REFRESH_COOLDOWN_MS) return
-
-      resetAutoUpdateSchedule()
+      if (selectForced([id]).length === 0) return
       startManualRefresh([id], "Failed to retry plugin:")
     },
-    [manualRefreshIdsRef, pluginStatesRef, resetAutoUpdateSchedule, startManualRefresh]
+    [selectForced, startManualRefresh]
   )
 
   const handleRefreshAll = useCallback(() => {
     if (!pluginSettings) return
-    const enabledIds = getEnabledPluginIds(pluginSettings)
-    if (enabledIds.length === 0) return
-
-    const now = Date.now()
-    const eligibleIds = enabledIds.filter((id) => {
-      const currentState = pluginStatesRef.current[id]
-      if (currentState?.loading) return false
-      if (manualRefreshIdsRef.current.has(id)) return false
-      const lastManualRefreshAt = currentState?.lastManualRefreshAt
-      if (!lastManualRefreshAt) return true
-      return now - lastManualRefreshAt >= REFRESH_COOLDOWN_MS
-    })
+    const eligibleIds = selectForced(getEnabledPluginIds(pluginSettings))
     if (eligibleIds.length === 0) return
 
-    resetAutoUpdateSchedule()
     startManualRefresh(eligibleIds, "Failed to start refresh batch:")
-  }, [pluginSettings, pluginStatesRef, manualRefreshIdsRef, resetAutoUpdateSchedule, startManualRefresh])
+  }, [pluginSettings, selectForced, startManualRefresh])
 
   return {
     handleRetryPlugin,

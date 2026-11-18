@@ -57,10 +57,10 @@ function makeArgs() {
     setMenubarIconStyle: vi.fn(),
     setThemeMode: vi.fn(),
     setResetTimerDisplayMode: vi.fn(),
-    setAutoUpdateInterval: vi.fn(),
     setLoadingForPlugins: vi.fn(),
     setErrorForPlugins: vi.fn(),
     startBatch: vi.fn().mockResolvedValue(["codex"]),
+    selectDueProviders: vi.fn((ids: string[]) => ids),
     scheduleTrayIconUpdate: vi.fn(),
   }
 }
@@ -94,18 +94,43 @@ describe("useSettingsStoreSync", () => {
     expect(args.scheduleTrayIconUpdate).toHaveBeenCalledWith("settings", 0)
   })
 
-  it("applies auto refresh interval changes from the settings window", async () => {
+  it("only probes the providers the refresh policy considers due", async () => {
     const args = makeArgs()
+    args.selectDueProviders.mockImplementation((ids: string[]) =>
+      ids.filter((id) => id !== "codex")
+    )
     renderHook(() => useSettingsStoreSync(args))
 
     await waitFor(() =>
-      expect(state.eventHandlers["settings:auto-update-interval-changed"]).toBeDefined()
+      expect(state.eventHandlers["settings:plugins-changed"]).toBeDefined()
     )
     act(() => {
-      state.eventHandlers["settings:auto-update-interval-changed"]({ payload: 30 })
+      state.eventHandlers["settings:plugins-changed"]({
+        payload: { order: ["codex", "claude"], disabled: [] },
+      })
     })
 
-    expect(args.setAutoUpdateInterval).toHaveBeenCalledWith(30)
+    expect(args.selectDueProviders).toHaveBeenCalledWith(["codex", "claude"])
+    expect(args.setLoadingForPlugins).toHaveBeenCalledWith(["claude"])
+    expect(args.startBatch).toHaveBeenCalledWith(["claude"])
+  })
+
+  it("does not probe when every enabled provider is fresh or backed off", async () => {
+    const args = makeArgs()
+    args.selectDueProviders.mockReturnValue([])
+    renderHook(() => useSettingsStoreSync(args))
+
+    await waitFor(() =>
+      expect(state.eventHandlers["settings:plugins-changed"]).toBeDefined()
+    )
+    act(() => {
+      state.eventHandlers["settings:plugins-changed"]({
+        payload: { order: ["codex", "claude"], disabled: [] },
+      })
+    })
+
+    expect(args.setLoadingForPlugins).not.toHaveBeenCalled()
+    expect(args.startBatch).not.toHaveBeenCalled()
   })
 
   it("reports a provider refresh failure", async () => {

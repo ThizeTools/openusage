@@ -6,16 +6,13 @@ import type { DisplayPluginState } from "@/hooks/app/use-app-plugin-views"
 import type { SettingsPluginState } from "@/hooks/app/use-settings-plugin-list"
 import { useAppVersion } from "@/hooks/app/use-app-version"
 import { usePanel } from "@/hooks/app/use-panel"
+import { usePanelAnchor } from "@/hooks/app/use-panel-anchor"
 import { useAppUpdate } from "@/hooks/use-app-update"
+import { isWindowsPlatform } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import { useAppUiStore } from "@/stores/app-ui-store"
 
 const ARROW_OVERHEAD_PX = 37
-
-function isWindowsPlatform() {
-  if (typeof navigator === "undefined") return false
-  return /Win/.test(navigator.platform)
-}
 
 type AppShellProps = {
   onRefreshAll: () => void
@@ -62,6 +59,8 @@ export function AppShell({
     }))
   )
 
+  const panelAnchor = usePanelAnchor()
+
   const {
     containerRef,
     scrollRef,
@@ -105,6 +104,7 @@ export function AppShell({
             onPluginContextAction={onPluginContextAction}
             isPluginRefreshAvailable={isPluginRefreshAvailable}
             onReorder={onNavReorder}
+            anchor={panelAnchor}
           />
           <div className="flex-1 flex flex-col px-3 pt-2 pb-1.5 min-w-0 bg-card dark:bg-muted/50">
             <div className="relative flex-1 min-h-0">

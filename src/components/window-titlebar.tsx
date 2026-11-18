@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Minus, Square, X } from "lucide-react"
+import { isMacPlatform } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 
 /**
@@ -10,6 +11,9 @@ import { cn } from "@/lib/utils"
  * See docs/tauri-fix/tauri-win11-titlebar-drag-teleport-fix.md.
  */
 export function WindowTitleBar({ title }: { title: string }) {
+  // macOS uses the native title bar (decorations are enabled in Rust).
+  if (isMacPlatform()) return null
+
   const win = getCurrentWindow()
 
   const stop = (e: React.MouseEvent) => e.stopPropagation()

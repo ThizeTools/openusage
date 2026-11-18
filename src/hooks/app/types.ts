@@ -4,6 +4,7 @@ export type PluginState = {
   data: PluginOutput | null
   loading: boolean
   error: string | null
+  notice?: string | null
   lastManualRefreshAt: number | null
   lastUpdatedAt: number | null
 }

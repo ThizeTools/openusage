@@ -4,6 +4,7 @@ use aes_gcm::{
     aes::Aes256,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use crate::plugin_engine::failure;
 use rquickjs::{Ctx, Exception, Function, Object};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -728,11 +729,35 @@ pub(crate) fn inject_host_api_with_deadline<'js>(
     inject_sqlite(ctx, &host)?;
     inject_ls(ctx, &host, plugin_id)?;
     inject_ccusage(ctx, &host, plugin_id, deadline)?;
+    inject_rate_limit_signal(ctx, &host, plugin_id)?;
 
     probe_ctx.set("host", host)?;
     crate::accounts::inject_account(ctx, &probe_ctx, plugin_id)?;
     globals.set("__openusage_ctx", probe_ctx)?;
 
+    Ok(())
+}
+
+/// `ctx.host.signalRateLimit(retryAfterSeconds?)`: tells the scheduler the provider asked us to
+/// wait. See `plugin_engine::failure`.
+fn inject_rate_limit_signal<'js>(
+    ctx: &Ctx<'js>,
+    host: &Object<'js>,
+    plugin_id: &str,
+) -> rquickjs::Result<()> {
+    let pid = plugin_id.to_string();
+    host.set(
+        "signalRateLimit",
+        Function::new(
+            ctx.clone(),
+            move |retry_after_seconds: rquickjs::function::Opt<rquickjs::Value<'_>>| {
+                log::info!("[plugin:{}] provider asked to wait (rate limited)", pid);
+                // Anything but a number (null, undefined, a string) means "wait unknown".
+                let wait = retry_after_seconds.0.and_then(|value| value.as_number());
+                failure::record_rate_limit(wait);
+            },
+        )?,
+    )?;
     Ok(())
 }
 
@@ -983,11 +1008,15 @@ fn inject_http<'js>(
                     builder = builder.body(body);
                 }
 
-                let response = builder
-                    .send()
-                    .map_err(|e| Exception::throw_message(&ctx_inner, &e.to_string()))?;
+                let response = builder.send().map_err(|e| {
+                    if failure::is_transport_error(&e) {
+                        failure::record_http_transport_failure();
+                    }
+                    Exception::throw_message(&ctx_inner, &e.to_string())
+                })?;
 
                 let status = response.status().as_u16();
+                failure::record_http_status(status);
                 let mut resp_headers = std::collections::HashMap::new();
                 for (key, value) in response.headers().iter() {
                     let header_value = value.to_str().map_err(|e| {

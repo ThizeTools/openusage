@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
-  DEFAULT_AUTO_UPDATE_INTERVAL,
-  DEFAULT_GLOBAL_SHORTCUT,
+  DEFAULT_MENU_BAR_WIDGET_BACKDROP,
+  DEFAULT_MENU_BAR_WIDGET_COLORS,
+  DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS,
+  DEFAULT_MENU_BAR_WIDGET_TONE_MODES,
+  DEFAULT_MENU_BAR_WIDGET_STYLE,
   DEFAULT_MENUBAR_ICON_STYLE,
   DEFAULT_PLUGIN_SETTINGS,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
@@ -12,8 +15,11 @@ import {
   DEFAULT_WIDGET_VISIBLE,
   arePluginSettingsEqual,
   getEnabledPluginIds,
-  loadAutoUpdateInterval,
-  loadGlobalShortcut,
+  loadMenuBarWidgetBackdrop,
+  loadMenuBarWidgetColors,
+  loadMenuBarWidgetTextColors,
+  loadMenuBarWidgetToneModes,
+  loadMenuBarWidgetStyle,
   loadMenubarIconStyle,
   loadPluginSettings,
   loadResetTimerDisplayMode,
@@ -25,8 +31,15 @@ import {
   migrateWindsurfToDevin,
   loadThemeMode,
   normalizePluginSettings,
-  saveAutoUpdateInterval,
-  saveGlobalShortcut,
+    parseMenuBarWidgetBackdrop,
+  parseMenuBarWidgetColors,
+  parseMenuBarWidgetTextColors,
+  parseMenuBarWidgetToneModes,
+  saveMenuBarWidgetBackdrop,
+  saveMenuBarWidgetColors,
+  saveMenuBarWidgetTextColors,
+  saveMenuBarWidgetToneModes,
+  saveMenuBarWidgetStyle,
   saveMenubarIconStyle,
   savePluginSettings,
   saveResetTimerDisplayMode,
@@ -191,20 +204,6 @@ describe("settings", () => {
     expect(getEnabledPluginIds({ order: ["a", "b"], disabled: ["b"] })).toEqual(["a"])
   })
 
-  it("loads default auto-update interval when missing", async () => {
-    await expect(loadAutoUpdateInterval()).resolves.toBe(DEFAULT_AUTO_UPDATE_INTERVAL)
-  })
-
-  it("loads stored auto-update interval", async () => {
-    storeState.set("autoUpdateInterval", 30)
-    await expect(loadAutoUpdateInterval()).resolves.toBe(30)
-  })
-
-  it("saves auto-update interval", async () => {
-    await saveAutoUpdateInterval(5)
-    await expect(loadAutoUpdateInterval()).resolves.toBe(5)
-  })
-
   it("loads default theme mode when missing", async () => {
     await expect(loadThemeMode()).resolves.toBe(DEFAULT_THEME_MODE)
   })
@@ -357,28 +356,6 @@ describe("settings", () => {
     expect(storeSaveMock).toHaveBeenCalledTimes(1)
   })
 
-  it("loads default global shortcut when missing", async () => {
-    await expect(loadGlobalShortcut()).resolves.toBe(DEFAULT_GLOBAL_SHORTCUT)
-  })
-
-  it("loads stored global shortcut values", async () => {
-    storeState.set("globalShortcut", "CommandOrControl+Shift+O")
-    await expect(loadGlobalShortcut()).resolves.toBe("CommandOrControl+Shift+O")
-
-    storeState.set("globalShortcut", null)
-    await expect(loadGlobalShortcut()).resolves.toBe(null)
-  })
-
-  it("falls back to default for invalid global shortcut values", async () => {
-    storeState.set("globalShortcut", 1234)
-    await expect(loadGlobalShortcut()).resolves.toBe(DEFAULT_GLOBAL_SHORTCUT)
-  })
-
-  it("saves global shortcut values", async () => {
-    await saveGlobalShortcut("CommandOrControl+Shift+O")
-    await expect(loadGlobalShortcut()).resolves.toBe("CommandOrControl+Shift+O")
-  })
-
   it("loads default start on login when missing", async () => {
     await expect(loadStartOnLogin()).resolves.toBe(DEFAULT_START_ON_LOGIN)
   })
@@ -410,6 +387,208 @@ describe("settings", () => {
   it("falls back to default for invalid widget visibility", async () => {
     storeState.set("taskbarWidgetVisible", "yes")
     await expect(loadWidgetVisible()).resolves.toBe(DEFAULT_WIDGET_VISIBLE)
+  })
+
+  it("defaults the menu bar widget to a transparent auto background and the compact style", async () => {
+    expect(DEFAULT_MENU_BAR_WIDGET_BACKDROP).toEqual({ enabled: true, color: "auto", opacity: 0, glass: 0, blur: 50 })
+    expect(DEFAULT_MENU_BAR_WIDGET_STYLE).toBe("compact")
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual(DEFAULT_MENU_BAR_WIDGET_BACKDROP)
+    await expect(loadMenuBarWidgetStyle()).resolves.toBe("compact")
+  })
+
+  it("loads and saves the menu bar widget backdrop", async () => {
+    const backdrop = { enabled: false, color: "#12ab34", opacity: 20, glass: 0, blur: 100 }
+    await saveMenuBarWidgetBackdrop(backdrop)
+    expect(storeState.get("menuBarWidgetBackdrop")).toEqual(backdrop)
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual(backdrop)
+  })
+
+  it("validates and clamps the stored backdrop field by field", () => {
+    expect(parseMenuBarWidgetBackdrop(null)).toBeNull()
+    expect(parseMenuBarWidgetBackdrop("solid")).toBeNull()
+    expect(parseMenuBarWidgetBackdrop([])).toBeNull()
+    expect(parseMenuBarWidgetBackdrop({})).toEqual(DEFAULT_MENU_BAR_WIDGET_BACKDROP)
+    expect(parseMenuBarWidgetBackdrop({ opacity: 150, glass: -20, blur: 33.6 })).toMatchObject({
+      opacity: 100,
+      glass: 0,
+      blur: 34,
+    })
+    expect(parseMenuBarWidgetBackdrop({ opacity: "9", glass: NaN, blur: Infinity })).toMatchObject({
+      opacity: 0,
+      glass: 0,
+      blur: 50,
+    })
+    expect(parseMenuBarWidgetBackdrop({ color: "#ABCDEF" })?.color).toBe("#abcdef")
+    expect(parseMenuBarWidgetBackdrop({ color: "auto" })?.color).toBe("auto")
+    expect(parseMenuBarWidgetBackdrop({ color: "red" })?.color).toBe("auto")
+    expect(parseMenuBarWidgetBackdrop({ color: "#fff" })?.color).toBe("auto")
+    expect(parseMenuBarWidgetBackdrop({ enabled: false })?.enabled).toBe(false)
+    expect(parseMenuBarWidgetBackdrop({ enabled: "no" })?.enabled).toBe(true)
+  })
+
+  it("clamps an out-of-range stored backdrop on load", async () => {
+    storeState.set("menuBarWidgetBackdrop", { enabled: true, color: "#00ff00", opacity: 400, glass: -5, blur: 7.4 })
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual({
+      enabled: true,
+      color: "#00ff00",
+      opacity: 100,
+      glass: 0,
+      blur: 7,
+    })
+  })
+
+  it("migrates the removed background presets when the new key is absent", async () => {
+    const cases: [string, unknown][] = [
+      ["none", { ...DEFAULT_MENU_BAR_WIDGET_BACKDROP, enabled: false }],
+      ["solid", { enabled: true, color: "auto", opacity: 92, glass: 0, blur: 0 }],
+      ["inverted", { enabled: true, color: "#ffffff", opacity: 95, glass: 0, blur: 0 }],
+      ["dock", { enabled: true, color: "auto", opacity: 55, glass: 60, blur: 60 }],
+      ["glass-dock", { enabled: true, color: "auto", opacity: 55, glass: 60, blur: 60 }],
+      ["glass-liquid", { enabled: true, color: "auto", opacity: 55, glass: 60, blur: 60 }],
+      ["glass-edge", { enabled: true, color: "auto", opacity: 55, glass: 60, blur: 60 }],
+    ]
+    for (const [legacy, expected] of cases) {
+      storeState.set("menuBarWidgetBackground", legacy)
+      await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual(expected)
+    }
+  })
+
+  it("falls back to the default for an unknown legacy background", async () => {
+    for (const removed of ["subtle", "outline", "glow", 3]) {
+      storeState.set("menuBarWidgetBackground", removed)
+      await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual(DEFAULT_MENU_BAR_WIDGET_BACKDROP)
+    }
+  })
+
+  it("migrates the legacy menu bar widget card boolean when the new key is absent", async () => {
+    storeState.set("menuBarWidgetCard", false)
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual({ ...DEFAULT_MENU_BAR_WIDGET_BACKDROP, enabled: false })
+    storeState.set("menuBarWidgetCard", true)
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual({
+      enabled: true,
+      color: "auto",
+      opacity: 92,
+      glass: 0,
+      blur: 0,
+    })
+    storeState.set("menuBarWidgetCard", "no")
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual(DEFAULT_MENU_BAR_WIDGET_BACKDROP)
+  })
+
+  it("prefers the new backdrop key over the legacy keys", async () => {
+    storeState.set("menuBarWidgetCard", false)
+    storeState.set("menuBarWidgetBackground", "none")
+    storeState.set("menuBarWidgetBackdrop", { enabled: true, color: "auto", opacity: 70, glass: 10, blur: 20 })
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toEqual({
+      enabled: true,
+      color: "auto",
+      opacity: 70,
+      glass: 10,
+      blur: 20,
+    })
+  })
+
+  it("prefers a legacy background over the legacy card boolean", async () => {
+    storeState.set("menuBarWidgetCard", false)
+    storeState.set("menuBarWidgetBackground", "inverted")
+    await expect(loadMenuBarWidgetBackdrop()).resolves.toMatchObject({ enabled: true, color: "#ffffff" })
+  })
+
+  it("loads and saves the menu bar widget style", async () => {
+    for (const style of ["stacked", "compact", "inline", "inline-compact"] as const) {
+      await saveMenuBarWidgetStyle(style)
+      expect(storeState.get("menuBarWidgetStyle")).toBe(style)
+      await expect(loadMenuBarWidgetStyle()).resolves.toBe(style)
+    }
+  })
+
+  it("migrates removed menu bar widget styles to the default", async () => {
+    for (const removed of ["bars", "rings"]) {
+      storeState.set("menuBarWidgetStyle", removed)
+      await expect(loadMenuBarWidgetStyle()).resolves.toBe(DEFAULT_MENU_BAR_WIDGET_STYLE)
+    }
+  })
+
+  it("falls back to default for an invalid menu bar widget style", async () => {
+    storeState.set("menuBarWidgetStyle", 3)
+    await expect(loadMenuBarWidgetStyle()).resolves.toBe(DEFAULT_MENU_BAR_WIDGET_STYLE)
+  })
+
+  it("loads the default menu bar widget colors when missing", async () => {
+    await expect(loadMenuBarWidgetColors()).resolves.toEqual(DEFAULT_MENU_BAR_WIDGET_COLORS)
+    expect(DEFAULT_MENU_BAR_WIDGET_COLORS).toEqual({})
+  })
+
+  it("loads and saves the menu bar widget colors", async () => {
+    const colors = { ahead: "#00ff00", onTrack: "#ffaa00", behind: "#ff0000" }
+    await saveMenuBarWidgetColors(colors)
+    expect(storeState.get("menuBarWidgetColors")).toEqual(colors)
+    await expect(loadMenuBarWidgetColors()).resolves.toEqual(colors)
+
+    await saveMenuBarWidgetColors({ behind: "#123456" })
+    await expect(loadMenuBarWidgetColors()).resolves.toEqual({ behind: "#123456" })
+  })
+
+  it("drops invalid menu bar widget color entries and normalizes the valid ones", async () => {
+    storeState.set("menuBarWidgetColors", {
+      ahead: "#ABCDEF",
+      onTrack: "red",
+      behind: "#12345",
+      extra: "#000000",
+    })
+    await expect(loadMenuBarWidgetColors()).resolves.toEqual({ ahead: "#abcdef" })
+
+    expect(parseMenuBarWidgetColors({ ahead: 5, behind: "#12345g" })).toEqual({})
+    expect(parseMenuBarWidgetColors(null)).toEqual({})
+    expect(parseMenuBarWidgetColors("#ffffff")).toEqual({})
+    expect(parseMenuBarWidgetColors(["#ffffff"])).toEqual({})
+  })
+
+  it("loads the default menu bar widget text colors when missing", async () => {
+    await expect(loadMenuBarWidgetTextColors()).resolves.toEqual({ label: "mono", used: "color", expected: "mono" })
+    expect(DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS).toEqual({ label: "mono", used: "color", expected: "mono" })
+  })
+
+  it("loads and saves the menu bar widget text colors", async () => {
+    const value = { label: "color", used: "mono", expected: "mono" } as const
+    await saveMenuBarWidgetTextColors(value)
+    expect(storeState.get("menuBarWidgetTextColors")).toEqual(value)
+    await expect(loadMenuBarWidgetTextColors()).resolves.toEqual(value)
+  })
+
+  it("falls back to the default per field for invalid text color entries", () => {
+    expect(parseMenuBarWidgetTextColors({ label: "color", used: "rainbow", expected: 3 })).toEqual({
+      label: "color",
+      used: "color",
+      expected: "mono",
+    })
+    expect(parseMenuBarWidgetTextColors({ used: "mono" })).toEqual({ label: "mono", used: "mono", expected: "mono" })
+    for (const bad of [null, undefined, "mono", 5, ["color"]]) {
+      expect(parseMenuBarWidgetTextColors(bad)).toEqual(DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS)
+    }
+  })
+
+  it("loads the default menu bar widget tone modes when missing", async () => {
+    await expect(loadMenuBarWidgetToneModes()).resolves.toEqual({ ahead: "mono", onTrack: "color", behind: "color" })
+    expect(DEFAULT_MENU_BAR_WIDGET_TONE_MODES).toEqual({ ahead: "mono", onTrack: "color", behind: "color" })
+  })
+
+  it("loads and saves the menu bar widget tone modes", async () => {
+    const value = { ahead: "mono", onTrack: "color", behind: "mono" } as const
+    await saveMenuBarWidgetToneModes(value)
+    expect(storeState.get("menuBarWidgetToneModes")).toEqual(value)
+    await expect(loadMenuBarWidgetToneModes()).resolves.toEqual(value)
+  })
+
+  it("falls back to color per field for invalid tone mode entries", () => {
+    expect(parseMenuBarWidgetToneModes({ ahead: "mono", onTrack: "rainbow", behind: 3 })).toEqual({
+      ahead: "mono",
+      onTrack: "color",
+      behind: "color",
+    })
+    for (const bad of [null, undefined, "mono", 5, ["mono"]]) {
+      expect(parseMenuBarWidgetToneModes(bad)).toEqual(DEFAULT_MENU_BAR_WIDGET_TONE_MODES)
+    }
   })
 
   it("loads default widget provider ids when missing", async () => {

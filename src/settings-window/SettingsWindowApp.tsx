@@ -30,14 +30,10 @@ export function SettingsWindowApp() {
           pluginsMeta={s.pluginsMeta}
           onReorder={s.handleReorder}
           onToggle={s.handleToggle}
-          autoUpdateInterval={s.autoUpdateInterval}
-          onAutoUpdateIntervalChange={s.handleAutoUpdateIntervalChange}
           themeMode={s.themeMode}
           onThemeModeChange={s.handleThemeModeChange}
           resetTimerDisplayMode={s.resetTimerDisplayMode}
           onResetTimerDisplayModeChange={s.handleResetTimerDisplayModeChange}
-          globalShortcut={s.globalShortcut}
-          onGlobalShortcutChange={s.handleGlobalShortcutChange}
           statsShortcut={s.statsShortcut}
           onStatsShortcutChange={s.handleStatsShortcutChange}
           startOnLogin={s.startOnLogin}
@@ -48,6 +44,16 @@ export function SettingsWindowApp() {
           onWidgetProviderIdsChange={s.handleWidgetProviderIdsChange}
           widgetProviderMetrics={s.widgetProviderMetrics}
           onWidgetProviderMetricsChange={s.handleWidgetProviderMetricsChange}
+          menuBarWidgetBackdrop={s.menuBarWidgetBackdrop}
+          onMenuBarWidgetBackdropChange={s.handleMenuBarWidgetBackdropChange}
+          menuBarWidgetStyle={s.menuBarWidgetStyle}
+          onMenuBarWidgetStyleChange={s.handleMenuBarWidgetStyleChange}
+          menuBarWidgetColors={s.menuBarWidgetColors}
+          onMenuBarWidgetColorsChange={s.handleMenuBarWidgetColorsChange}
+          menuBarWidgetTextColors={s.menuBarWidgetTextColors}
+          onMenuBarWidgetTextColorsChange={s.handleMenuBarWidgetTextColorsChange}
+          menuBarWidgetToneModes={s.menuBarWidgetToneModes}
+          onMenuBarWidgetToneModesChange={s.handleMenuBarWidgetToneModesChange}
           activeTab={activeTab}
           onActiveTabChange={setActiveTab}
         />

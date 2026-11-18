@@ -1,3 +1,4 @@
+import type { MenuBarWidgetBackdrop } from "@/lib/settings"
 import { formatAvailableAt, formatUsageText } from "@/lib/widget-format"
 import type { WidgetRow } from "@/lib/widget-rows"
 
@@ -14,16 +15,31 @@ export type TaskbarProvider = {
   items: TaskbarItem[]
 }
 
+/** macOS: native blur drawn under the widget image (the PNG itself never blurs). */
+export type TaskbarBackdrop = {
+  /** 0..1 strength (alpha of the native blur view). */
+  blur: number
+  /** Corner radius in pt. */
+  radius: number
+  /** Size of the widget image in pt. */
+  widthPt: number
+  heightPt: number
+}
+
 export type TaskbarPayload = {
   providers: TaskbarProvider[]
   tooltip: string
+  /** macOS: base64 PNG (no data: prefix) of the pre-rendered menu bar widget. */
+  menuBarImage?: string | null
+  /** macOS: native blur behind the image; null when the background is off or its blur is 0. */
+  menuBarBackdrop?: TaskbarBackdrop | null
 }
 
 type TaskbarProviderDraft = Omit<TaskbarProvider, "iconMask"> & { iconUrl: string }
 
 function buildItems(row: WidgetRow): TaskbarItem[] {
   if (typeof row.limitedUntilMs === "number") {
-    return [{ label: "", value: formatAvailableAt(row.limitedUntilMs), tone: "behind" }]
+    return [{ label: "", value: formatAvailableAt(row.limitedUntilMs), tone: "neutral" }]
   }
   if (row.metrics?.length) {
     return row.metrics.map((metric) => ({
@@ -35,7 +51,13 @@ function buildItems(row: WidgetRow): TaskbarItem[] {
   if (row.fraction === null) {
     return [{ label: "", value: "—", tone: "neutral" }]
   }
-  return [{ label: "", value: formatUsageText(row.fraction, row.expectedFraction), tone: row.tone }]
+  return [
+    {
+      label: "",
+      value: formatUsageText(row.fraction, row.expectedFraction),
+      tone: row.tone,
+    },
+  ]
 }
 
 function buildTooltipLine(row: WidgetRow, items: TaskbarItem[]): string {
@@ -58,4 +80,14 @@ export function buildTaskbarPayload(rows: WidgetRow[]): Omit<TaskbarPayload, "pr
     tooltipLines.push(buildTooltipLine(row, items))
   }
   return { providers, tooltip: tooltipLines.join("\n") }
+}
+
+/** Native blur request for the rendered image, or null when the background is disabled or its blur is 0. */
+export function buildMenuBarBackdrop(
+  backdrop: MenuBarWidgetBackdrop,
+  size: { width: number; height: number } | null,
+  radius: number
+): TaskbarBackdrop | null {
+  if (!backdrop.enabled || backdrop.blur <= 0 || !size) return null
+  return { blur: backdrop.blur / 100, radius, widthPt: size.width, heightPt: size.height }
 }

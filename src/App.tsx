@@ -14,7 +14,7 @@ import { useSettingsTheme } from "@/hooks/app/use-settings-theme"
 import { useTaskbarWidgetSync } from "@/hooks/app/use-taskbar-widget-sync"
 import { useTrayIcon } from "@/hooks/app/use-tray-icon"
 import { useWidgetVisibilitySync } from "@/hooks/app/use-widget-visibility-sync"
-import { REFRESH_COOLDOWN_MS, savePluginSettings } from "@/lib/settings"
+import { savePluginSettings } from "@/lib/settings"
 import { type PluginContextAction } from "@/components/side-nav"
 import { useAppPluginStore } from "@/stores/app-plugin-store"
 import { useAppPreferencesStore } from "@/stores/app-preferences-store"
@@ -49,27 +49,21 @@ function App() {
   )
 
   const {
-    autoUpdateInterval,
-    setAutoUpdateInterval,
     themeMode,
     setThemeMode,
     setMenubarIconStyle,
     resetTimerDisplayMode,
     setResetTimerDisplayMode,
-    setGlobalShortcut,
     setStartOnLogin,
     setWidgetVisible,
     setWidgetProviderIds,
   } = useAppPreferencesStore(
     useShallow((state) => ({
-      autoUpdateInterval: state.autoUpdateInterval,
-      setAutoUpdateInterval: state.setAutoUpdateInterval,
       themeMode: state.themeMode,
       setThemeMode: state.setThemeMode,
       setMenubarIconStyle: state.setMenubarIconStyle,
       resetTimerDisplayMode: state.resetTimerDisplayMode,
       setResetTimerDisplayMode: state.setResetTimerDisplayMode,
-      setGlobalShortcut: state.setGlobalShortcut,
       setStartOnLogin: state.setStartOnLogin,
       setWidgetVisible: state.setWidgetVisible,
       setWidgetProviderIds: state.setWidgetProviderIds,
@@ -86,13 +80,13 @@ function App() {
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    selectDueProviders,
+    hydrateProbeState,
     autoUpdateNextAt,
-    setAutoUpdateNextAt,
     handleRetryPlugin,
     handleRefreshAll,
   } = useProbe({
     pluginSettings,
-    autoUpdateInterval,
     onProbeResult: handleProbeResult,
   })
 
@@ -115,17 +109,17 @@ function App() {
   } = useSettingsBootstrap({
     setPluginSettings,
     setPluginsMeta,
-    setAutoUpdateInterval,
     setThemeMode,
     setMenubarIconStyle,
     setResetTimerDisplayMode,
-    setGlobalShortcut,
     setStartOnLogin,
     setWidgetVisible,
     setWidgetProviderIds,
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    hydrateProbeState,
+    selectDueProviders,
   })
 
   useSettingsTheme(themeMode)
@@ -137,10 +131,10 @@ function App() {
     setMenubarIconStyle,
     setThemeMode,
     setResetTimerDisplayMode,
-    setAutoUpdateInterval,
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    selectDueProviders,
     scheduleTrayIconUpdate: scheduleTrayIconUpdate,
   })
   useAccountsPluginSync({
@@ -167,14 +161,8 @@ function App() {
   })
 
   const {
-    handleAutoUpdateIntervalChange,
-    handleGlobalShortcutChange,
     handleStartOnLoginChange,
   } = useSettingsSystemActions({
-    pluginSettings,
-    setAutoUpdateInterval,
-    setAutoUpdateNextAt,
-    setGlobalShortcut,
     setStartOnLogin,
     applyStartOnLogin,
   })
@@ -241,10 +229,7 @@ function App() {
   const isPluginRefreshAvailable = useCallback(
     (pluginId: string) => {
       const pluginState = pluginStates[pluginId]
-      if (!pluginState) return true
-      if (pluginState.loading) return false
-      if (!pluginState.lastManualRefreshAt) return true
-      return Date.now() - pluginState.lastManualRefreshAt >= REFRESH_COOLDOWN_MS
+      return !pluginState?.loading
     },
     [pluginStates]
   )
@@ -267,11 +252,9 @@ function App() {
         onRetryPlugin: handleRetryPlugin,
         onReorder: handleReorder,
         onToggle: handleToggle,
-        onAutoUpdateIntervalChange: handleAutoUpdateIntervalChange,
         onThemeModeChange: handleThemeModeChange,
         onResetTimerDisplayModeChange: handleResetTimerDisplayModeChange,
         onResetTimerDisplayModeToggle: handleResetTimerDisplayModeToggle,
-        onGlobalShortcutChange: handleGlobalShortcutChange,
         onStartOnLoginChange: handleStartOnLoginChange,
         onWidgetVisibleChange: handleWidgetVisibleChange,
         onWidgetProviderIdsChange: handleWidgetProviderIdsChange,

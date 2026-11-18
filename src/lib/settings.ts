@@ -1,16 +1,11 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import type { PluginMeta } from "@/lib/plugin-types";
 
-// Refresh cooldown duration in milliseconds (5 minutes)
-export const REFRESH_COOLDOWN_MS = 300_000;
-
 // Spec: persist plugin order + disabled list; new plugins append, default disabled unless in DEFAULT_ENABLED_PLUGINS.
 export type PluginSettings = {
   order: string[];
   disabled: string[];
 };
-
-export type AutoUpdateIntervalMinutes = 1 | 5 | 15 | 30;
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -25,38 +20,94 @@ export type WidgetProviderMetrics = Record<string, string[]>;
 
 export type GlobalShortcut = string | null;
 
+export const MENU_BAR_WIDGET_STYLES = ["stacked", "compact", "inline", "inline-compact"] as const;
+export type MenuBarWidgetStyle = (typeof MENU_BAR_WIDGET_STYLES)[number];
+
+/**
+ * The menu bar widget's background card: one parametric look instead of presets.
+ * `color` is "auto" (follows the menu bar: dark card on a dark bar, white on a light one) or `#rrggbb`.
+ * `opacity`, `glass` and `blur` are 0..100. Blur is real (native, macOS only); the PNG never draws it.
+ */
+export type MenuBarWidgetBackdrop = {
+  enabled: boolean;
+  color: "auto" | string;
+  opacity: number;
+  glass: number;
+  blur: number;
+};
+
+/** Custom tone colors as `#rrggbb`; a missing tone uses the built-in color. */
+export type MenuBarWidgetColors = { ahead?: string; onTrack?: string; behind?: string };
+
+export const MENU_BAR_TEXT_COLOR_MODES = ["mono", "color"] as const;
+export type MenuBarTextColorMode = (typeof MENU_BAR_TEXT_COLOR_MODES)[number];
+
+/** Per text part of the menu bar widget: drawn in the content color (mono) or in the pace tone color (color). */
+export type MenuBarWidgetTextColors = {
+  label: MenuBarTextColorMode;
+  used: MenuBarTextColorMode;
+  expected: MenuBarTextColorMode;
+};
+
+/** Per pace state: drawn in its tone color (color) or in the content color (mono). */
+export type MenuBarWidgetToneModes = {
+  ahead: MenuBarTextColorMode;
+  onTrack: MenuBarTextColorMode;
+  behind: MenuBarTextColorMode;
+};
+
 const SETTINGS_STORE_PATH = "settings.json";
 const PLUGIN_SETTINGS_KEY = "plugins";
-const AUTO_UPDATE_SETTINGS_KEY = "autoUpdateInterval";
 const THEME_MODE_KEY = "themeMode";
 const RESET_TIMER_DISPLAY_MODE_KEY = "resetTimerDisplayMode";
 const MENUBAR_ICON_STYLE_KEY = "menubarIconStyle";
 const LEGACY_TRAY_ICON_STYLE_KEY = "trayIconStyle";
 const LEGACY_TRAY_SHOW_PERCENTAGE_KEY = "trayShowPercentage";
-const GLOBAL_SHORTCUT_KEY = "globalShortcut";
 const STATS_SHORTCUT_KEY = "statsShortcut";
 const START_ON_LOGIN_KEY = "startOnLogin";
 // New key: the old "widgetVisible" belonged to the floating widget.
 const WIDGET_VISIBLE_KEY = "taskbarWidgetVisible";
 const WIDGET_PROVIDER_IDS_KEY = "widgetProviderIds";
 const WIDGET_PROVIDER_METRICS_KEY = "widgetProviderMetrics";
+// Legacy keys, migrated to MENU_BAR_WIDGET_BACKDROP_KEY when the new key is absent.
+const LEGACY_MENU_BAR_WIDGET_CARD_KEY = "menuBarWidgetCard";
+const LEGACY_MENU_BAR_WIDGET_BACKGROUND_KEY = "menuBarWidgetBackground";
+const MENU_BAR_WIDGET_BACKDROP_KEY = "menuBarWidgetBackdrop";
+const MENU_BAR_WIDGET_STYLE_KEY = "menuBarWidgetStyle";
+const MENU_BAR_WIDGET_COLORS_KEY = "menuBarWidgetColors";
+const MENU_BAR_WIDGET_TEXT_COLORS_KEY = "menuBarWidgetTextColors";
+const MENU_BAR_WIDGET_TONE_MODES_KEY = "menuBarWidgetToneModes";
 
-export const DEFAULT_AUTO_UPDATE_INTERVAL: AutoUpdateIntervalMinutes = 15;
 export const DEFAULT_THEME_MODE: ThemeMode = "system";
 export const DEFAULT_RESET_TIMER_DISPLAY_MODE: ResetTimerDisplayMode = "relative";
 export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = "provider";
-export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_STATS_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_START_ON_LOGIN = false;
 export const DEFAULT_WIDGET_VISIBLE = true;
 export const DEFAULT_WIDGET_PROVIDER_IDS: WidgetProviderIds = null;
 export const DEFAULT_WIDGET_PROVIDER_METRICS: WidgetProviderMetrics = {};
+export const DEFAULT_MENU_BAR_WIDGET_BACKDROP: MenuBarWidgetBackdrop = {
+  enabled: true,
+  color: "auto",
+  opacity: 0,
+  glass: 0,
+  blur: 50,
+};
+export const DEFAULT_MENU_BAR_WIDGET_STYLE: MenuBarWidgetStyle = "compact";
+export const DEFAULT_MENU_BAR_WIDGET_COLORS: MenuBarWidgetColors = {};
+export const DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS: MenuBarWidgetTextColors = {
+  label: "mono",
+  used: "color",
+  expected: "mono",
+};
+export const DEFAULT_MENU_BAR_WIDGET_TONE_MODES: MenuBarWidgetToneModes = {
+  ahead: "mono",
+  onTrack: "color",
+  behind: "color",
+};
 
 export const SETTINGS_PLUGINS_CHANGED_EVENT = "settings:plugins-changed";
-export const SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT =
-  "settings:auto-update-interval-changed";
 
-const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [1, 5, 15, 30];
 const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 const RESET_TIMER_DISPLAY_MODES: ResetTimerDisplayMode[] = ["relative", "absolute"];
 const MENUBAR_ICON_STYLES: MenubarIconStyle[] = ["provider", "donut", "bars"];
@@ -65,12 +116,6 @@ export const MENUBAR_ICON_STYLE_OPTIONS: { value: MenubarIconStyle; label: strin
   { value: "donut", label: "Donut" },
   { value: "bars", label: "Bars" },
 ];
-
-export const AUTO_UPDATE_OPTIONS: { value: AutoUpdateIntervalMinutes; label: string }[] =
-  AUTO_UPDATE_INTERVALS.map((value) => ({
-    value,
-    label: `${value} min`,
-  }));
 
 export const THEME_OPTIONS: { value: ThemeMode; label: string }[] =
   THEME_MODES.map((value) => ({
@@ -128,26 +173,6 @@ export function migrateWindsurfToDevin(settings: PluginSettings): PluginSettings
     order,
     disabled: Array.from(new Set(disabled)),
   };
-}
-
-function isAutoUpdateInterval(value: unknown): value is AutoUpdateIntervalMinutes {
-  return (
-    typeof value === "number" &&
-    AUTO_UPDATE_INTERVALS.includes(value as AutoUpdateIntervalMinutes)
-  );
-}
-
-export async function loadAutoUpdateInterval(): Promise<AutoUpdateIntervalMinutes> {
-  const stored = await store.get<unknown>(AUTO_UPDATE_SETTINGS_KEY);
-  if (isAutoUpdateInterval(stored)) return stored;
-  return DEFAULT_AUTO_UPDATE_INTERVAL;
-}
-
-export async function saveAutoUpdateInterval(
-  interval: AutoUpdateIntervalMinutes
-): Promise<void> {
-  await store.set(AUTO_UPDATE_SETTINGS_KEY, interval);
-  await store.save();
 }
 
 export function normalizePluginSettings(
@@ -301,17 +326,6 @@ function isGlobalShortcut(value: unknown): value is GlobalShortcut {
   return typeof value === "string";
 }
 
-export async function loadGlobalShortcut(): Promise<GlobalShortcut> {
-  const stored = await store.get<unknown>(GLOBAL_SHORTCUT_KEY);
-  if (isGlobalShortcut(stored)) return stored;
-  return DEFAULT_GLOBAL_SHORTCUT;
-}
-
-export async function saveGlobalShortcut(shortcut: GlobalShortcut): Promise<void> {
-  await store.set(GLOBAL_SHORTCUT_KEY, shortcut);
-  await store.save();
-}
-
 export async function loadStatsShortcut(): Promise<GlobalShortcut> {
   const stored = await store.get<unknown>(STATS_SHORTCUT_KEY);
   if (isGlobalShortcut(stored)) return stored;
@@ -381,4 +395,155 @@ export async function loadWidgetProviderMetrics(): Promise<WidgetProviderMetrics
 export async function saveWidgetProviderMetrics(metrics: WidgetProviderMetrics): Promise<void> {
   await store.set(WIDGET_PROVIDER_METRICS_KEY, metrics);
   await store.save();
+}
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+
+function clampPercent(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  return Math.min(100, Math.max(0, Math.round(value)))
+}
+
+/**
+ * Validates a stored backdrop: each field keeps its value when valid (percentages are rounded and
+ * clamped to 0..100, colors lowercased) and falls back to the default otherwise. Null when not an object.
+ */
+export function parseMenuBarWidgetBackdrop(value: unknown): MenuBarWidgetBackdrop | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+  const source = value as Record<string, unknown>
+  const defaults = DEFAULT_MENU_BAR_WIDGET_BACKDROP
+  const color =
+    typeof source.color === "string" && HEX_COLOR.test(source.color)
+      ? source.color.toLowerCase()
+      : source.color === "auto"
+        ? "auto"
+        : defaults.color
+  return {
+    enabled: typeof source.enabled === "boolean" ? source.enabled : defaults.enabled,
+    color,
+    opacity: clampPercent(source.opacity, defaults.opacity),
+    glass: clampPercent(source.glass, defaults.glass),
+    blur: clampPercent(source.blur, defaults.blur),
+  }
+}
+
+/** Backdrop equivalent to a removed background preset (null when `value` is not one). */
+export function migrateLegacyMenuBarWidgetBackground(value: unknown): MenuBarWidgetBackdrop | null {
+  if (typeof value !== "string") return null
+  const defaults = DEFAULT_MENU_BAR_WIDGET_BACKDROP
+  if (value === "none") return { ...defaults, enabled: false }
+  if (value === "solid") return { enabled: true, color: "auto", opacity: 92, glass: 0, blur: 0 }
+  if (value === "inverted") return { enabled: true, color: "#ffffff", opacity: 95, glass: 0, blur: 0 }
+  if (value === "dock" || value.startsWith("glass-")) {
+    return { enabled: true, color: "auto", opacity: 55, glass: 60, blur: 60 }
+  }
+  return null
+}
+
+export function parseMenuBarWidgetStyle(value: unknown): MenuBarWidgetStyle | null {
+  return typeof value === "string" && (MENU_BAR_WIDGET_STYLES as readonly string[]).includes(value)
+    ? (value as MenuBarWidgetStyle)
+    : null
+}
+
+export async function loadMenuBarWidgetBackdrop(): Promise<MenuBarWidgetBackdrop> {
+  const stored = await store.get<unknown>(MENU_BAR_WIDGET_BACKDROP_KEY)
+  const parsed = parseMenuBarWidgetBackdrop(stored)
+  if (parsed) return parsed
+  // Migrate the removed background presets / boolean card only while the new key is absent.
+  if (stored === undefined || stored === null) {
+    const legacyBackground = migrateLegacyMenuBarWidgetBackground(
+      await store.get<unknown>(LEGACY_MENU_BAR_WIDGET_BACKGROUND_KEY)
+    )
+    if (legacyBackground) return legacyBackground
+    const legacyCard = await store.get<unknown>(LEGACY_MENU_BAR_WIDGET_CARD_KEY)
+    if (legacyCard === false) return { ...DEFAULT_MENU_BAR_WIDGET_BACKDROP, enabled: false }
+    if (legacyCard === true) return migrateLegacyMenuBarWidgetBackground("solid") ?? DEFAULT_MENU_BAR_WIDGET_BACKDROP
+  }
+  return { ...DEFAULT_MENU_BAR_WIDGET_BACKDROP }
+}
+
+export async function saveMenuBarWidgetBackdrop(value: MenuBarWidgetBackdrop): Promise<void> {
+  await store.set(MENU_BAR_WIDGET_BACKDROP_KEY, value)
+  await store.save()
+}
+
+export async function loadMenuBarWidgetStyle(): Promise<MenuBarWidgetStyle> {
+  const stored = await store.get<unknown>(MENU_BAR_WIDGET_STYLE_KEY)
+  return parseMenuBarWidgetStyle(stored) ?? DEFAULT_MENU_BAR_WIDGET_STYLE
+}
+
+export async function saveMenuBarWidgetStyle(value: MenuBarWidgetStyle): Promise<void> {
+  await store.set(MENU_BAR_WIDGET_STYLE_KEY, value)
+  await store.save()
+}
+
+/** Keeps only the known tones whose value is a `#rrggbb` string (lowercased); anything else is dropped. */
+export function parseMenuBarWidgetColors(value: unknown): MenuBarWidgetColors {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {}
+  const source = value as Record<string, unknown>
+  const result: MenuBarWidgetColors = {}
+  for (const tone of ["ahead", "onTrack", "behind"] as const) {
+    const color = source[tone]
+    if (typeof color === "string" && HEX_COLOR.test(color)) result[tone] = color.toLowerCase()
+  }
+  return result
+}
+
+export async function loadMenuBarWidgetColors(): Promise<MenuBarWidgetColors> {
+  const stored = await store.get<unknown>(MENU_BAR_WIDGET_COLORS_KEY)
+  return parseMenuBarWidgetColors(stored)
+}
+
+export async function saveMenuBarWidgetColors(value: MenuBarWidgetColors): Promise<void> {
+  await store.set(MENU_BAR_WIDGET_COLORS_KEY, value)
+  await store.save()
+}
+
+/** Each known part keeps its stored mode when valid; anything else falls back to that part's default. */
+export function parseMenuBarWidgetTextColors(value: unknown): MenuBarWidgetTextColors {
+  const source =
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  const result = { ...DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS }
+  for (const part of ["label", "used", "expected"] as const) {
+    const mode = source[part]
+    if (typeof mode === "string" && (MENU_BAR_TEXT_COLOR_MODES as readonly string[]).includes(mode)) {
+      result[part] = mode as MenuBarTextColorMode
+    }
+  }
+  return result
+}
+
+export async function loadMenuBarWidgetTextColors(): Promise<MenuBarWidgetTextColors> {
+  const stored = await store.get<unknown>(MENU_BAR_WIDGET_TEXT_COLORS_KEY)
+  return parseMenuBarWidgetTextColors(stored)
+}
+
+export async function saveMenuBarWidgetTextColors(value: MenuBarWidgetTextColors): Promise<void> {
+  await store.set(MENU_BAR_WIDGET_TEXT_COLORS_KEY, value)
+  await store.save()
+}
+
+/** Each pace state keeps its stored mode when valid; anything else falls back to "color". */
+export function parseMenuBarWidgetToneModes(value: unknown): MenuBarWidgetToneModes {
+  const source =
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  const result = { ...DEFAULT_MENU_BAR_WIDGET_TONE_MODES }
+  for (const tone of ["ahead", "onTrack", "behind"] as const) {
+    const mode = source[tone]
+    if (typeof mode === "string" && (MENU_BAR_TEXT_COLOR_MODES as readonly string[]).includes(mode)) {
+      result[tone] = mode as MenuBarTextColorMode
+    }
+  }
+  return result
+}
+
+export async function loadMenuBarWidgetToneModes(): Promise<MenuBarWidgetToneModes> {
+  const stored = await store.get<unknown>(MENU_BAR_WIDGET_TONE_MODES_KEY)
+  return parseMenuBarWidgetToneModes(stored)
+}
+
+export async function saveMenuBarWidgetToneModes(value: MenuBarWidgetToneModes): Promise<void> {
+  await store.set(MENU_BAR_WIDGET_TONE_MODES_KEY, value)
+  await store.save()
 }

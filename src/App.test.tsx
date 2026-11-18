@@ -11,8 +11,6 @@ const state = vi.hoisted(() => ({
   startBatchMock: vi.fn(),
   savePluginSettingsMock: vi.fn(),
   loadPluginSettingsMock: vi.fn(),
-  loadAutoUpdateIntervalMock: vi.fn(),
-  saveAutoUpdateIntervalMock: vi.fn(),
   loadThemeModeMock: vi.fn(),
   saveThemeModeMock: vi.fn(),
   loadResetTimerDisplayModeMock: vi.fn(),
@@ -20,8 +18,6 @@ const state = vi.hoisted(() => ({
   loadMenubarIconStyleMock: vi.fn(),
   saveMenubarIconStyleMock: vi.fn(),
   migrateLegacyTraySettingsMock: vi.fn(),
-  loadGlobalShortcutMock: vi.fn(),
-  saveGlobalShortcutMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
   saveStartOnLoginMock: vi.fn(),
   loadWidgetVisibleMock: vi.fn(),
@@ -230,8 +226,6 @@ vi.mock("@/lib/settings", async () => {
     ...actual,
     loadPluginSettings: state.loadPluginSettingsMock,
     savePluginSettings: state.savePluginSettingsMock,
-    loadAutoUpdateInterval: state.loadAutoUpdateIntervalMock,
-    saveAutoUpdateInterval: state.saveAutoUpdateIntervalMock,
     loadThemeMode: state.loadThemeModeMock,
     saveThemeMode: state.saveThemeModeMock,
     loadResetTimerDisplayMode: state.loadResetTimerDisplayModeMock,
@@ -239,8 +233,6 @@ vi.mock("@/lib/settings", async () => {
     loadMenubarIconStyle: state.loadMenubarIconStyleMock,
     saveMenubarIconStyle: state.saveMenubarIconStyleMock,
     migrateLegacyTraySettings: state.migrateLegacyTraySettingsMock,
-    loadGlobalShortcut: state.loadGlobalShortcutMock,
-    saveGlobalShortcut: state.saveGlobalShortcutMock,
     loadStartOnLogin: state.loadStartOnLoginMock,
     saveStartOnLogin: state.saveStartOnLoginMock,
     loadWidgetVisible: state.loadWidgetVisibleMock,
@@ -269,8 +261,6 @@ describe("App", () => {
     state.startBatchMock.mockReset()
     state.savePluginSettingsMock.mockReset()
     state.loadPluginSettingsMock.mockReset()
-    state.loadAutoUpdateIntervalMock.mockReset()
-    state.saveAutoUpdateIntervalMock.mockReset()
     state.loadThemeModeMock.mockReset()
     state.saveThemeModeMock.mockReset()
     state.loadResetTimerDisplayModeMock.mockReset()
@@ -278,8 +268,6 @@ describe("App", () => {
     state.loadMenubarIconStyleMock.mockReset()
     state.saveMenubarIconStyleMock.mockReset()
     state.migrateLegacyTraySettingsMock.mockReset()
-    state.loadGlobalShortcutMock.mockReset()
-    state.saveGlobalShortcutMock.mockReset()
     state.loadStartOnLoginMock.mockReset()
     state.saveStartOnLoginMock.mockReset()
     state.loadWidgetVisibleMock.mockReset()
@@ -310,7 +298,6 @@ describe("App", () => {
     updaterState.relaunchMock.mockReset()
     updaterState.checkMock.mockResolvedValue(null)
     state.savePluginSettingsMock.mockResolvedValue(undefined)
-    state.saveAutoUpdateIntervalMock.mockResolvedValue(undefined)
     state.loadThemeModeMock.mockResolvedValue("system")
     state.saveThemeModeMock.mockResolvedValue(undefined)
     state.loadResetTimerDisplayModeMock.mockResolvedValue("relative")
@@ -318,8 +305,6 @@ describe("App", () => {
     state.loadMenubarIconStyleMock.mockResolvedValue("provider")
     state.saveMenubarIconStyleMock.mockResolvedValue(undefined)
     state.migrateLegacyTraySettingsMock.mockResolvedValue(undefined)
-    state.loadGlobalShortcutMock.mockResolvedValue(null)
-    state.saveGlobalShortcutMock.mockResolvedValue(undefined)
     state.loadStartOnLoginMock.mockResolvedValue(false)
     state.saveStartOnLoginMock.mockResolvedValue(undefined)
     state.loadWidgetVisibleMock.mockResolvedValue(false)
@@ -355,7 +340,6 @@ describe("App", () => {
       return null
     })
     state.loadPluginSettingsMock.mockResolvedValue({ order: ["a"], disabled: [] })
-    state.loadAutoUpdateIntervalMock.mockResolvedValue(15)
   })
 
   afterEach(() => {
@@ -809,7 +793,7 @@ describe("App", () => {
     await waitFor(() => expect(state.startBatchMock).toHaveBeenCalledWith(["b"]))
   })
 
-  it("respects manual refresh cooldown for sidebar context menu reload", async () => {
+  it("does not block sidebar context menu reload after a manual refresh, only while loading", async () => {
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a", "b"], disabled: [] })
     render(<App />)
     await waitFor(() => expect(state.startBatchMock).toHaveBeenCalled())
@@ -841,11 +825,20 @@ describe("App", () => {
     })
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1))
 
+    // Right after the first manual refresh completed there is no cooldown.
     state.startBatchMock.mockClear()
-    const cooldownReloadAction = await triggerPluginContextAction("Beta", "b", "reload")
-    const cooldownReloadConfig = menuState.iconMenuItemConfigs.find((item) => item.id === "ctx-reload-b")
-    expect(cooldownReloadConfig?.enabled).toBe(false)
-    cooldownReloadAction()
+    const secondReloadAction = await triggerPluginContextAction("Beta", "b", "reload")
+    const secondReloadConfig = menuState.iconMenuItemConfigs.find((item) => item.id === "ctx-reload-b")
+    expect(secondReloadConfig?.enabled).toBe(true)
+    secondReloadAction()
+    await waitFor(() => expect(state.startBatchMock).toHaveBeenCalledWith(["b"]))
+
+    // While that refresh is still loading, reload is disabled and ignored.
+    state.startBatchMock.mockClear()
+    const loadingReloadAction = await triggerPluginContextAction("Beta", "b", "reload")
+    const loadingReloadConfig = menuState.iconMenuItemConfigs.find((item) => item.id === "ctx-reload-b")
+    expect(loadingReloadConfig?.enabled).toBe(false)
+    loadingReloadAction()
 
     expect(state.startBatchMock).not.toHaveBeenCalled()
   })
@@ -1116,10 +1109,8 @@ describe("App", () => {
     errorSpy.mockRestore()
   })
 
-  it("fires auto-update interval and schedules next", async () => {
+  it("fires the fixed refresh schedule and schedules next", async () => {
     vi.useFakeTimers()
-    // Set a very short interval for testing (5 min = 300000ms)
-    state.loadAutoUpdateIntervalMock.mockResolvedValueOnce(5)
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a"], disabled: [] })
 
     render(<App />)
@@ -1137,8 +1128,8 @@ describe("App", () => {
     state.probeHandlers?.onBatchComplete()
     const initialCalls = state.startBatchMock.mock.calls.length
 
-    // Advance time by 5 minutes to trigger the interval
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    // The first pass at launch + 5 min finds this reading fresh and skips it; the second probes.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000)
 
     // The interval should have fired, calling startBatch again
     await vi.waitFor(() =>
@@ -1152,7 +1143,6 @@ describe("App", () => {
     vi.useFakeTimers()
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    state.loadAutoUpdateIntervalMock.mockResolvedValueOnce(5)
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a"], disabled: [] })
     // First call succeeds (initial batch), subsequent calls fail
     state.startBatchMock
@@ -1171,8 +1161,8 @@ describe("App", () => {
     })
     state.probeHandlers?.onBatchComplete()
 
-    // Advance time to trigger the interval (which will fail)
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    // Advance time to trigger a pass that finds the reading stale (which will fail)
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000)
 
     await vi.waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith("Failed to start auto-update batch:", expect.any(Error))
@@ -1180,16 +1170,6 @@ describe("App", () => {
 
     errorSpy.mockRestore()
     vi.useRealTimers()
-  })
-
-  it("logs error when loading auto-update interval fails", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    state.loadAutoUpdateIntervalMock.mockRejectedValueOnce(new Error("load interval failed"))
-    render(<App />)
-    await waitFor(() =>
-      expect(errorSpy).toHaveBeenCalledWith("Failed to load auto-update interval:", expect.any(Error))
-    )
-    errorSpy.mockRestore()
   })
 
   it("logs error when loading theme mode fails", async () => {
@@ -1274,7 +1254,7 @@ describe("App", () => {
     expect(lastCall[0]).toEqual(["a", "b"])
   })
 
-  it("does not leak manual refresh cooldown state when refresh-all start fails", async () => {
+  it("does not leak manual refresh state when refresh-all start fails", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     try {
       state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a"], disabled: [] })
@@ -1308,7 +1288,7 @@ describe("App", () => {
       })
       await screen.findByText("Now")
 
-      // If manual state leaked, cooldown would hide Retry here.
+      // If manual state leaked, Retry would be hidden here.
       state.probeHandlers?.onResult({
         providerId: "a",
         displayName: "Alpha",
@@ -1321,7 +1301,7 @@ describe("App", () => {
     }
   })
 
-  it("tracks manual refresh and clears cooldown flag on result", async () => {
+  it("tracks manual refresh and clears manual flag on result", async () => {
     render(<App />)
     await waitFor(() => expect(state.startBatchMock).toHaveBeenCalled())
 
@@ -1382,18 +1362,6 @@ describe("App", () => {
     // The retry should still work (startBatch called) but resetAutoUpdateSchedule
     // should hit the enabledIds.length === 0 branch
     expect(state.startBatchMock).toHaveBeenCalledWith(["a"])
-  })
-
-  it("logs error when loading global shortcut fails", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    state.loadGlobalShortcutMock.mockRejectedValueOnce(new Error("load shortcut failed"))
-
-    render(<App />)
-    await waitFor(() =>
-      expect(errorSpy).toHaveBeenCalledWith("Failed to load global shortcut:", expect.any(Error))
-    )
-
-    errorSpy.mockRestore()
   })
 
   it("queues a follow-up tray update when tooltip update is in-flight", async () => {

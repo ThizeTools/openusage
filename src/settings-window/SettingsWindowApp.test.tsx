@@ -17,14 +17,10 @@ const state = vi.hoisted(() => ({
   autostartIsEnabledMock: vi.fn(),
   loadPluginSettingsMock: vi.fn(),
   savePluginSettingsMock: vi.fn(),
-  loadAutoUpdateIntervalMock: vi.fn(),
-  saveAutoUpdateIntervalMock: vi.fn(),
   loadThemeModeMock: vi.fn(),
   saveThemeModeMock: vi.fn(),
   loadResetTimerDisplayModeMock: vi.fn(),
   saveResetTimerDisplayModeMock: vi.fn(),
-  loadGlobalShortcutMock: vi.fn(),
-  saveGlobalShortcutMock: vi.fn(),
   loadStatsShortcutMock: vi.fn(),
   saveStatsShortcutMock: vi.fn(),
   loadStartOnLoginMock: vi.fn(),
@@ -34,6 +30,16 @@ const state = vi.hoisted(() => ({
   saveWidgetProviderIdsMock: vi.fn(),
   loadWidgetProviderMetricsMock: vi.fn(),
   saveWidgetProviderMetricsMock: vi.fn(),
+  loadMenuBarWidgetBackdropMock: vi.fn(),
+  saveMenuBarWidgetBackdropMock: vi.fn(),
+  loadMenuBarWidgetStyleMock: vi.fn(),
+  saveMenuBarWidgetStyleMock: vi.fn(),
+  loadMenuBarWidgetColorsMock: vi.fn(),
+  saveMenuBarWidgetColorsMock: vi.fn(),
+  loadMenuBarWidgetTextColorsMock: vi.fn(),
+  saveMenuBarWidgetTextColorsMock: vi.fn(),
+  loadMenuBarWidgetToneModesMock: vi.fn(),
+  saveMenuBarWidgetToneModesMock: vi.fn(),
 }))
 
 vi.mock("@dnd-kit/core", () => ({
@@ -122,14 +128,10 @@ vi.mock("@/lib/settings", async () => {
     ...actual,
     loadPluginSettings: state.loadPluginSettingsMock,
     savePluginSettings: state.savePluginSettingsMock,
-    loadAutoUpdateInterval: state.loadAutoUpdateIntervalMock,
-    saveAutoUpdateInterval: state.saveAutoUpdateIntervalMock,
     loadThemeMode: state.loadThemeModeMock,
     saveThemeMode: state.saveThemeModeMock,
     loadResetTimerDisplayMode: state.loadResetTimerDisplayModeMock,
     saveResetTimerDisplayMode: state.saveResetTimerDisplayModeMock,
-    loadGlobalShortcut: state.loadGlobalShortcutMock,
-    saveGlobalShortcut: state.saveGlobalShortcutMock,
     loadStatsShortcut: state.loadStatsShortcutMock,
     saveStatsShortcut: state.saveStatsShortcutMock,
     loadStartOnLogin: state.loadStartOnLoginMock,
@@ -139,6 +141,16 @@ vi.mock("@/lib/settings", async () => {
     saveWidgetProviderIds: state.saveWidgetProviderIdsMock,
     loadWidgetProviderMetrics: state.loadWidgetProviderMetricsMock,
     saveWidgetProviderMetrics: state.saveWidgetProviderMetricsMock,
+    loadMenuBarWidgetBackdrop: state.loadMenuBarWidgetBackdropMock,
+    saveMenuBarWidgetBackdrop: state.saveMenuBarWidgetBackdropMock,
+    loadMenuBarWidgetStyle: state.loadMenuBarWidgetStyleMock,
+    saveMenuBarWidgetStyle: state.saveMenuBarWidgetStyleMock,
+    loadMenuBarWidgetColors: state.loadMenuBarWidgetColorsMock,
+    saveMenuBarWidgetColors: state.saveMenuBarWidgetColorsMock,
+    loadMenuBarWidgetTextColors: state.loadMenuBarWidgetTextColorsMock,
+    saveMenuBarWidgetTextColors: state.saveMenuBarWidgetTextColorsMock,
+    loadMenuBarWidgetToneModes: state.loadMenuBarWidgetToneModesMock,
+    saveMenuBarWidgetToneModes: state.saveMenuBarWidgetToneModesMock,
   }
 })
 
@@ -163,14 +175,10 @@ describe("SettingsWindowApp", () => {
     state.autostartIsEnabledMock.mockReset()
     state.loadPluginSettingsMock.mockReset()
     state.savePluginSettingsMock.mockReset()
-    state.loadAutoUpdateIntervalMock.mockReset()
-    state.saveAutoUpdateIntervalMock.mockReset()
     state.loadThemeModeMock.mockReset()
     state.saveThemeModeMock.mockReset()
     state.loadResetTimerDisplayModeMock.mockReset()
     state.saveResetTimerDisplayModeMock.mockReset()
-    state.loadGlobalShortcutMock.mockReset()
-    state.saveGlobalShortcutMock.mockReset()
     state.loadStatsShortcutMock.mockReset()
     state.saveStatsShortcutMock.mockReset()
     state.loadStartOnLoginMock.mockReset()
@@ -180,30 +188,46 @@ describe("SettingsWindowApp", () => {
     state.saveWidgetProviderIdsMock.mockReset()
     state.loadWidgetProviderMetricsMock.mockReset()
     state.saveWidgetProviderMetricsMock.mockReset()
+    state.loadMenuBarWidgetBackdropMock.mockReset()
+    state.saveMenuBarWidgetBackdropMock.mockReset()
+    state.loadMenuBarWidgetStyleMock.mockReset()
+    state.saveMenuBarWidgetStyleMock.mockReset()
+    state.loadMenuBarWidgetColorsMock.mockReset()
+    state.saveMenuBarWidgetColorsMock.mockReset()
+    state.loadMenuBarWidgetTextColorsMock.mockReset()
+    state.saveMenuBarWidgetTextColorsMock.mockReset()
+    state.loadMenuBarWidgetToneModesMock.mockReset()
+    state.saveMenuBarWidgetToneModesMock.mockReset()
 
     state.autostartEnableMock.mockResolvedValue(undefined)
     state.autostartDisableMock.mockResolvedValue(undefined)
     state.autostartIsEnabledMock.mockResolvedValue(false)
     state.savePluginSettingsMock.mockResolvedValue(undefined)
-    state.saveAutoUpdateIntervalMock.mockResolvedValue(undefined)
     state.saveThemeModeMock.mockResolvedValue(undefined)
     state.saveResetTimerDisplayModeMock.mockResolvedValue(undefined)
-    state.saveGlobalShortcutMock.mockResolvedValue(undefined)
     state.saveStatsShortcutMock.mockResolvedValue(undefined)
     state.saveStartOnLoginMock.mockResolvedValue(undefined)
     state.saveWidgetProviderIdsMock.mockResolvedValue(undefined)
     state.saveWidgetProviderMetricsMock.mockResolvedValue(undefined)
+    state.saveMenuBarWidgetBackdropMock.mockResolvedValue(undefined)
+    state.saveMenuBarWidgetStyleMock.mockResolvedValue(undefined)
+    state.saveMenuBarWidgetColorsMock.mockResolvedValue(undefined)
+    state.saveMenuBarWidgetTextColorsMock.mockResolvedValue(undefined)
+    state.saveMenuBarWidgetToneModesMock.mockResolvedValue(undefined)
 
     state.loadPluginSettingsMock.mockResolvedValue({ order: ["a", "b"], disabled: [] })
-    state.loadAutoUpdateIntervalMock.mockResolvedValue(15)
     state.loadThemeModeMock.mockResolvedValue("system")
     state.loadResetTimerDisplayModeMock.mockResolvedValue("relative")
-    state.loadGlobalShortcutMock.mockResolvedValue(null)
     state.loadStatsShortcutMock.mockResolvedValue(null)
     state.loadStartOnLoginMock.mockResolvedValue(false)
     state.loadWidgetVisibleMock.mockResolvedValue(false)
     state.loadWidgetProviderIdsMock.mockResolvedValue(null)
     state.loadWidgetProviderMetricsMock.mockResolvedValue({})
+    state.loadMenuBarWidgetBackdropMock.mockResolvedValue({ enabled: true, color: "auto", opacity: 60, glass: 40, blur: 50 })
+    state.loadMenuBarWidgetStyleMock.mockResolvedValue("stacked")
+    state.loadMenuBarWidgetColorsMock.mockResolvedValue({})
+    state.loadMenuBarWidgetTextColorsMock.mockResolvedValue({ label: "mono", used: "color", expected: "color" })
+    state.loadMenuBarWidgetToneModesMock.mockResolvedValue({ ahead: "color", onTrack: "color", behind: "color" })
 
     state.invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_plugins") {
@@ -289,17 +313,6 @@ describe("SettingsWindowApp", () => {
     expect(await screen.findByText("Alpha · work")).toBeInTheDocument()
   })
 
-  it("broadcasts auto refresh interval changes", async () => {
-    render(<SettingsWindowApp />)
-    await userEvent.click(await screen.findByRole("radio", { name: "30 min" }))
-
-    expect(state.saveAutoUpdateIntervalMock).toHaveBeenCalledWith(30)
-    expect(state.emitMock).toHaveBeenCalledWith(
-      "settings:auto-update-interval-changed",
-      30
-    )
-  })
-
   it("saves the widget metrics of a provider when a metric is unchecked", async () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
@@ -309,12 +322,12 @@ describe("SettingsWindowApp", () => {
     expect(state.saveWidgetProviderMetricsMock).toHaveBeenCalledWith({ a: [] })
   })
 
-  it("renders the stats shortcut section", async () => {
+  it("renders the global shortcut section", async () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Shortcuts" })
     await openTab("Shortcuts")
-    expect(await screen.findByText("Stats Shortcut")).toBeInTheDocument()
-    expect(await screen.findByText("Show or hide the stats popup")).toBeInTheDocument()
+    expect(await screen.findByText("Global Shortcut")).toBeInTheDocument()
+    expect(await screen.findByText("Show or hide the stats panel from anywhere")).toBeInTheDocument()
   })
 
   it("invokes set_widget_visible when toggling the taskbar widget", async () => {

@@ -6,9 +6,7 @@ import type { PluginMeta } from "@/lib/plugin-types"
 import {
   getEnabledPluginIds,
   normalizePluginSettings,
-  SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT,
   SETTINGS_PLUGINS_CHANGED_EVENT,
-  type AutoUpdateIntervalMinutes,
   type MenubarIconStyle,
   type PluginSettings,
   type ResetTimerDisplayMode,
@@ -23,10 +21,11 @@ type Args = {
   setMenubarIconStyle: (value: MenubarIconStyle) => void
   setThemeMode: (value: ThemeMode) => void
   setResetTimerDisplayMode: (value: ResetTimerDisplayMode) => void
-  setAutoUpdateInterval: (value: AutoUpdateIntervalMinutes) => void
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
+  /** The ids among `ids` an automatic pass should probe: not fresh, not backed off, not running. */
+  selectDueProviders: (ids: string[]) => string[]
   scheduleTrayIconUpdate: ScheduleTrayIconUpdate
 }
 
@@ -41,10 +40,10 @@ export function useSettingsStoreSync({
   setMenubarIconStyle,
   setThemeMode,
   setResetTimerDisplayMode,
-  setAutoUpdateInterval,
   setLoadingForPlugins,
   setErrorForPlugins,
   startBatch,
+  selectDueProviders,
   scheduleTrayIconUpdate,
 }: Args) {
   useEffect(() => {
@@ -68,7 +67,6 @@ export function useSettingsStoreSync({
       })
       await subscribe<ThemeMode>("themeMode", setThemeMode)
       await subscribe<ResetTimerDisplayMode>("resetTimerDisplayMode", setResetTimerDisplayMode)
-      await subscribe<AutoUpdateIntervalMinutes>("autoUpdateInterval", setAutoUpdateInterval)
       await subscribe<PluginSettings>("plugins", (value) => {
         // Guard against normalizing against an empty meta list (e.g. a bootstrap
         // save firing before plugins loaded), which would wipe `order` and hide
@@ -86,24 +84,19 @@ export function useSettingsStoreSync({
           setPluginSettings(normalized)
           scheduleTrayIconUpdate("settings", 0)
 
-          const enabledIds = getEnabledPluginIds(normalized)
-          if (enabledIds.length === 0) return
-          setLoadingForPlugins(enabledIds)
-          void startBatch(enabledIds).catch((error) => {
+          // A provider enabled just now has no reading and is probed at once; the others keep a
+          // fresh reading or wait out their backoff.
+          const dueIds = selectDueProviders(getEnabledPluginIds(normalized))
+          if (dueIds.length === 0) return
+          setLoadingForPlugins(dueIds)
+          void startBatch(dueIds).catch((error) => {
             console.error("Failed to refresh providers after settings change:", error)
-            setErrorForPlugins(enabledIds, "Failed to start probe")
+            setErrorForPlugins(dueIds, "Failed to start probe")
           })
         }
       )
       if (cancelled) pluginsChangedUnlisten()
       else unlisteners.push(pluginsChangedUnlisten)
-
-      const intervalChangedUnlisten = await listen<AutoUpdateIntervalMinutes>(
-        SETTINGS_AUTO_UPDATE_INTERVAL_CHANGED_EVENT,
-        (event) => setAutoUpdateInterval(event.payload)
-      )
-      if (cancelled) intervalChangedUnlisten()
-      else unlisteners.push(intervalChangedUnlisten)
     })()
 
     return () => {
@@ -116,10 +109,10 @@ export function useSettingsStoreSync({
     setMenubarIconStyle,
     setThemeMode,
     setResetTimerDisplayMode,
-    setAutoUpdateInterval,
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    selectDueProviders,
     scheduleTrayIconUpdate,
   ])
 }

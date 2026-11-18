@@ -4,15 +4,11 @@ import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow, PhysicalSize, currentMonitor } from "@tauri-apps/api/window"
 import type { ActiveView } from "@/components/side-nav"
 import type { DisplayPluginState } from "@/hooks/app/use-app-plugin-views"
+import { isWindowsPlatform } from "@/lib/platform"
 
 const PANEL_WIDTH = 400
 const MAX_HEIGHT_FALLBACK_PX = 600
 const MAX_HEIGHT_FRACTION_OF_MONITOR = 0.8
-
-function isWindowsPlatform() {
-  if (typeof navigator === "undefined") return false
-  return /Win/.test(navigator.platform)
-}
 
 type UsePanelArgs = {
   activeView: ActiveView

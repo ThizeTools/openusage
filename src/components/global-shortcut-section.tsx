@@ -152,8 +152,8 @@ interface GlobalShortcutSectionProps {
 export function GlobalShortcutSection({
   globalShortcut,
   onGlobalShortcutChange,
-  title = "Widget Shortcut",
-  description = "Show or hide the taskbar widget",
+  title = "Global Shortcut",
+  description = "Show or hide the stats panel from anywhere",
 }: GlobalShortcutSectionProps) {
   const [isRecording, setIsRecording] = useState(false)
   // Track pressed keys using event.code (physical key location)

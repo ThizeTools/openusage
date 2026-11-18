@@ -228,6 +228,7 @@
 
   function rateLimitBadge(ctx, resp) {
     const retryAfter = parseRetryAfter(resp.headers)
+    ctx.host.signalRateLimit(retryAfter)
     const text = retryAfter === null
       ? "Rate limited, try again later"
       : "Rate limited, retry in ~" + Math.max(1, Math.ceil(retryAfter / 60)) + "m"

@@ -1,3 +1,4 @@
+use crate::plugin_engine::failure::{self, ProbeFailure};
 use crate::plugin_engine::host_api;
 use crate::plugin_engine::manifest::LoadedPlugin;
 use rquickjs::{Array, Context, Ctx, Error, Object, Promise, Runtime, Value};
@@ -67,6 +68,10 @@ pub struct PluginOutput {
     pub plan: Option<String>,
     pub lines: Vec<MetricLine>,
     pub icon_url: String,
+    /// Why this probe did not succeed. None for a clean probe. Set for thrown errors and for
+    /// probes that signalled a rate limit but still returned lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ProbeFailure>,
 }
 
 pub fn run_probe(plugin: &LoadedPlugin, app_data_dir: &PathBuf, app_version: &str) -> PluginOutput {
@@ -84,6 +89,7 @@ fn run_probe_with_timeout(
     app_version: &str,
     timeout: Duration,
 ) -> PluginOutput {
+    failure::reset();
     let fallback = error_output(plugin, "runtime error".to_string());
     let timeout_message = probe_timeout_message(timeout);
     let deadline_at = Instant::now()
@@ -216,10 +222,10 @@ fn run_probe_with_timeout(
             .ok()
             .filter(|s| !s.is_empty());
 
-        let lines = match parse_lines(&result) {
-            Ok(lines) if !lines.is_empty() => lines,
-            Ok(_) => vec![error_line("no lines returned".to_string())],
-            Err(msg) => vec![error_line(msg)],
+        let (lines, failure) = match parse_lines(&result) {
+            Ok(lines) if !lines.is_empty() => (lines, failure::failure_of_returned_probe()),
+            Ok(_) => malformed_probe("no lines returned".to_string()),
+            Err(msg) => malformed_probe(msg),
         };
 
         PluginOutput {
@@ -228,6 +234,7 @@ fn run_probe_with_timeout(
             plan,
             lines,
             icon_url,
+            failure,
         }
     })
 }
@@ -675,13 +682,20 @@ fn parse_bar_chart_line<'js>(
     )
 }
 
+fn malformed_probe(message: String) -> (Vec<MetricLine>, Option<ProbeFailure>) {
+    let failure = failure::classify(&message);
+    (vec![error_line(message)], Some(failure))
+}
+
 fn error_output(plugin: &LoadedPlugin, message: String) -> PluginOutput {
+    let failure = failure::classify(&message);
     PluginOutput {
         provider_id: plugin.manifest.id.clone(),
         display_name: plugin.manifest.name.clone(),
         plan: None,
         lines: vec![error_line(message)],
         icon_url: plugin.icon_data_url.clone(),
+        failure: Some(failure),
     }
 }
 
@@ -812,6 +826,210 @@ mod tests {
         );
 
         assert_eq!(error_text(output), "probe timed out after 5ms");
+    }
+
+    fn failure_of(output: &PluginOutput) -> Option<(failure::FailureKind, Option<u64>)> {
+        output
+            .failure
+            .as_ref()
+            .map(|f| (f.kind, f.retry_after_seconds))
+    }
+
+    #[test]
+    fn clean_probe_has_no_failure() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe(ctx) {
+                    return { lines: [ctx.line.text({ label: "A", value: "1" })] };
+                }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("clean"), "0.0.0");
+        assert!(output.failure.is_none());
+        let json = serde_json::to_value(&output).expect("serialize");
+        assert!(json.get("failure").is_none());
+    }
+
+    #[test]
+    fn thrown_http_429_message_is_classified_rate_limited() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe() { throw "Request failed (HTTP 429). Try again later."; }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("rl-msg"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::RateLimited, None))
+        );
+    }
+
+    #[test]
+    fn other_thrown_errors_are_classified_refused() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe() { throw "Not logged in. Sign in again."; }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("refused"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::Refused, None))
+        );
+    }
+
+    #[test]
+    fn signal_rate_limit_marks_a_returned_probe_and_keeps_its_lines() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe(ctx) {
+                    ctx.host.signalRateLimit(120);
+                    return { lines: [ctx.line.badge({ label: "Status", text: "Rate limited" })] };
+                }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("rl-signal"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::RateLimited, Some(120)))
+        );
+        assert_eq!(error_text(output), "Rate limited");
+    }
+
+    #[test]
+    fn signal_rate_limit_without_a_wait_and_with_a_thrown_error() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe(ctx) {
+                    ctx.host.signalRateLimit(null);
+                    throw "Something unrelated";
+                }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("rl-null"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::RateLimited, None))
+        );
+    }
+
+    #[test]
+    fn signal_rate_limit_caps_the_wait_at_one_hour() {
+        let plugin = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe(ctx) {
+                    ctx.host.signalRateLimit(86400);
+                    throw "nope";
+                }
+            };
+            "#,
+        );
+        let output = run_probe(&plugin, &temp_app_dir("rl-cap"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::RateLimited, Some(3600)))
+        );
+    }
+
+    #[test]
+    fn connection_failure_is_classified_unreachable() {
+        // A port nothing listens on: bind to find a free one, then close it.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let script = format!(
+            r#"
+            globalThis.__openusage_plugin = {{
+                probe(ctx) {{
+                    try {{
+                        ctx.host.http.request({{ url: "http://127.0.0.1:{port}/", timeoutMs: 2000 }});
+                    }} catch (e) {{
+                        throw "Weird failure text with no hint";
+                    }}
+                    return {{ lines: [] }};
+                }}
+            }};
+            "#
+        );
+        let plugin = test_plugin(&script);
+        let output = run_probe(&plugin, &temp_app_dir("transport"), "0.0.0");
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::Unreachable, None))
+        );
+    }
+
+    #[test]
+    fn http_error_status_is_not_unreachable() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let script = format!(
+            r#"
+            globalThis.__openusage_plugin = {{
+                probe(ctx) {{
+                    const resp = ctx.host.http.request({{ url: "http://127.0.0.1:{port}/", timeoutMs: 2000 }});
+                    throw "Usage request failed (HTTP " + resp.status + ")";
+                }}
+            }};
+            "#
+        );
+        let plugin = test_plugin(&script);
+        let output = run_probe(&plugin, &temp_app_dir("status500"), "0.0.0");
+        let _ = server.join();
+        assert_eq!(
+            failure_of(&output),
+            Some((failure::FailureKind::Refused, None))
+        );
+    }
+
+    #[test]
+    fn failure_signals_do_not_leak_between_probes() {
+        let rate_limited = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe(ctx) { ctx.host.signalRateLimit(60); throw "x"; }
+            };
+            "#,
+        );
+        let plain = test_plugin(
+            r#"
+            globalThis.__openusage_plugin = {
+                probe() { throw "y"; }
+            };
+            "#,
+        );
+        let first = run_probe(&rate_limited, &temp_app_dir("leak-a"), "0.0.0");
+        let second = run_probe(&plain, &temp_app_dir("leak-b"), "0.0.0");
+        assert_eq!(
+            failure_of(&first),
+            Some((failure::FailureKind::RateLimited, Some(60)))
+        );
+        assert_eq!(
+            failure_of(&second),
+            Some((failure::FailureKind::Refused, None))
+        );
     }
 
     #[test]

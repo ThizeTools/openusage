@@ -9,8 +9,6 @@ import type { PluginMeta } from "@/lib/plugin-types"
 import { loadAvailablePlugins } from "@/lib/provider-discovery"
 import {
   arePluginSettingsEqual,
-  DEFAULT_AUTO_UPDATE_INTERVAL,
-  DEFAULT_GLOBAL_SHORTCUT,
   DEFAULT_MENUBAR_ICON_STYLE,
   DEFAULT_PLUGIN_SETTINGS,
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
@@ -19,8 +17,6 @@ import {
   DEFAULT_WIDGET_PROVIDER_IDS,
   DEFAULT_WIDGET_VISIBLE,
   getEnabledPluginIds,
-  loadAutoUpdateInterval,
-  loadGlobalShortcut,
   loadMenubarIconStyle,
   migrateLegacyTraySettings,
   migrateWindsurfToDevin,
@@ -32,8 +28,6 @@ import {
   loadWidgetVisible,
   normalizePluginSettings,
   savePluginSettings,
-  type AutoUpdateIntervalMinutes,
-  type GlobalShortcut,
   type MenubarIconStyle,
   type PluginSettings,
   type ResetTimerDisplayMode,
@@ -44,10 +38,8 @@ import {
 type UseSettingsBootstrapArgs = {
   setPluginSettings: (value: PluginSettings | null) => void
   setPluginsMeta: (value: PluginMeta[]) => void
-  setAutoUpdateInterval: (value: AutoUpdateIntervalMinutes) => void
   setThemeMode: (value: ThemeMode) => void
   setResetTimerDisplayMode: (value: ResetTimerDisplayMode) => void
-  setGlobalShortcut: (value: GlobalShortcut) => void
   setStartOnLogin: (value: boolean) => void
   setMenubarIconStyle: (value: MenubarIconStyle) => void
   setWidgetVisible: (value: boolean) => void
@@ -55,22 +47,26 @@ type UseSettingsBootstrapArgs = {
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
+  /** Shows the persisted readings and backoffs from the previous run. Must settle before the launch pass. */
+  hydrateProbeState: () => Promise<void>
+  /** The ids among `ids` an automatic pass should probe: not fresh, not backed off, not running. */
+  selectDueProviders: (ids: string[]) => string[]
 }
 
 export function useSettingsBootstrap({
   setPluginSettings,
   setPluginsMeta,
-  setAutoUpdateInterval,
   setThemeMode,
   setResetTimerDisplayMode,
-  setGlobalShortcut,
-  setStartOnLogin,
+setStartOnLogin,
   setMenubarIconStyle,
   setWidgetVisible,
   setWidgetProviderIds,
   setLoadingForPlugins,
   setErrorForPlugins,
-  startBatch
+  startBatch,
+  hydrateProbeState,
+  selectDueProviders
 }: UseSettingsBootstrapArgs) {
   const [pluginLoadError, setPluginLoadError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
@@ -107,38 +103,35 @@ export function useSettingsBootstrap({
 
         const defaultNormalized = normalizePluginSettings(DEFAULT_PLUGIN_SETTINGS, availablePlugins)
         setPluginSettings(defaultNormalized)
-        const defaultEnabledIds = getEnabledPluginIds(defaultNormalized)
-        setLoadingForPlugins(defaultEnabledIds)
-        void startBatch(defaultEnabledIds).catch((error) => {
-          console.error("Failed to start probe batch:", error)
-          if (isMounted) {
-            setErrorForPlugins(defaultEnabledIds, "Failed to start probe")
-          }
-        })
 
-        const storedSettings = await loadPluginSettings()
+        // Readings and backoffs from the previous run come first, so the launch pass below only
+        // probes providers whose last success is stale and that no backoff holds.
+        const [, storedSettings] = await Promise.all([
+          hydrateProbeState().catch((error) => {
+            console.error("Failed to hydrate probe state:", error)
+          }),
+          loadPluginSettings(),
+        ])
+        if (!isMounted) return
         const migratedSettings = migrateWindsurfToDevin(storedSettings)
         const normalized = normalizePluginSettings(migratedSettings, availablePlugins)
-        if (isMounted && !arePluginSettingsEqual(defaultNormalized, normalized)) {
+        if (!arePluginSettingsEqual(defaultNormalized, normalized)) {
           setPluginSettings(normalized)
-          const enabledIds = getEnabledPluginIds(normalized)
-          setLoadingForPlugins(enabledIds)
-          void startBatch(enabledIds).catch((error) => {
+        }
+
+        const enabledIds = getEnabledPluginIds(normalized)
+        const dueIds = selectDueProviders(enabledIds)
+        if (dueIds.length > 0) {
+          setLoadingForPlugins(dueIds)
+          void startBatch(dueIds).catch((error) => {
             console.error("Failed to start probe batch:", error)
             if (isMounted) {
-              setErrorForPlugins(enabledIds, "Failed to start probe")
+              setErrorForPlugins(dueIds, "Failed to start probe")
             }
           })
         }
         if (!arePluginSettingsEqual(storedSettings, normalized)) {
           await savePluginSettings(normalized)
-        }
-
-        let storedInterval = DEFAULT_AUTO_UPDATE_INTERVAL
-        try {
-          storedInterval = await loadAutoUpdateInterval()
-        } catch (error) {
-          console.error("Failed to load auto-update interval:", error)
         }
 
         let storedThemeMode = DEFAULT_THEME_MODE
@@ -153,13 +146,6 @@ export function useSettingsBootstrap({
           storedResetTimerDisplayMode = await loadResetTimerDisplayMode()
         } catch (error) {
           console.error("Failed to load reset timer display mode:", error)
-        }
-
-        let storedGlobalShortcut = DEFAULT_GLOBAL_SHORTCUT
-        try {
-          storedGlobalShortcut = await loadGlobalShortcut()
-        } catch (error) {
-          console.error("Failed to load global shortcut:", error)
         }
 
         let storedStartOnLogin = DEFAULT_START_ON_LOGIN
@@ -202,10 +188,8 @@ export function useSettingsBootstrap({
         }
 
         if (isMounted) {
-          setAutoUpdateInterval(storedInterval)
           setThemeMode(storedThemeMode)
           setResetTimerDisplayMode(storedResetTimerDisplayMode)
-          setGlobalShortcut(storedGlobalShortcut)
           setStartOnLogin(storedStartOnLogin)
           setMenubarIconStyle(storedMenubarIconStyle)
           setWidgetVisible(storedWidgetVisible)
@@ -225,10 +209,8 @@ export function useSettingsBootstrap({
     }
   }, [
     applyStartOnLogin,
-    setAutoUpdateInterval,
-    setErrorForPlugins,
-    setGlobalShortcut,
-    setLoadingForPlugins,
+      setErrorForPlugins,
+setLoadingForPlugins,
     setMenubarIconStyle,
     migrateWindsurfToDevin,
     migrateLegacyTraySettings,
@@ -240,6 +222,8 @@ export function useSettingsBootstrap({
     setWidgetVisible,
     setWidgetProviderIds,
     startBatch,
+    hydrateProbeState,
+    selectDueProviders,
     reloadToken
   ])
 

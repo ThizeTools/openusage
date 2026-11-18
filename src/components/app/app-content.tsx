@@ -6,8 +6,6 @@ import type { SettingsPluginState } from "@/hooks/app/use-settings-plugin-list"
 import { useAppPreferencesStore } from "@/stores/app-preferences-store"
 import { useAppUiStore } from "@/stores/app-ui-store"
 import type {
-  AutoUpdateIntervalMinutes,
-  GlobalShortcut,
   ResetTimerDisplayMode,
   ThemeMode,
   WidgetProviderIds,
@@ -26,11 +24,9 @@ export type AppContentActionProps = {
   onRetryPlugin: (id: string) => void
   onReorder: (orderedIds: string[]) => void
   onToggle: (id: string) => void
-  onAutoUpdateIntervalChange: (value: AutoUpdateIntervalMinutes) => void
   onThemeModeChange: (mode: ThemeMode) => void
   onResetTimerDisplayModeChange: (mode: ResetTimerDisplayMode) => void
   onResetTimerDisplayModeToggle: () => void
-  onGlobalShortcutChange: (value: GlobalShortcut) => void
   onStartOnLoginChange: (value: boolean) => void
   onWidgetVisibleChange: (value: boolean) => void
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void

@@ -24,13 +24,16 @@ import { AccountsTab } from "@/components/accounts/accounts-tab";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { WidgetMetricsSection } from "@/components/widget-metrics-section";
 import {
-  AUTO_UPDATE_OPTIONS,
   RESET_TIMER_DISPLAY_OPTIONS,
   THEME_OPTIONS,
-  type AutoUpdateIntervalMinutes,
   type GlobalShortcut,
   type ResetTimerDisplayMode,
   type ThemeMode,
+  type MenuBarWidgetBackdrop,
+  type MenuBarWidgetColors,
+  type MenuBarWidgetTextColors,
+  type MenuBarWidgetToneModes,
+  type MenuBarWidgetStyle,
   type WidgetProviderIds,
   type WidgetProviderMetrics,
 } from "@/lib/settings";
@@ -111,14 +114,10 @@ interface SettingsPageProps {
   plugins: PluginConfig[];
   onReorder: (orderedIds: string[]) => void;
   onToggle: (id: string) => void;
-  autoUpdateInterval: AutoUpdateIntervalMinutes;
-  onAutoUpdateIntervalChange: (value: AutoUpdateIntervalMinutes) => void;
   themeMode: ThemeMode;
   onThemeModeChange: (value: ThemeMode) => void;
   resetTimerDisplayMode: ResetTimerDisplayMode;
   onResetTimerDisplayModeChange: (value: ResetTimerDisplayMode) => void;
-  globalShortcut: GlobalShortcut;
-  onGlobalShortcutChange: (value: GlobalShortcut) => void;
   statsShortcut: GlobalShortcut;
   onStatsShortcutChange: (value: GlobalShortcut) => void;
   startOnLogin: boolean;
@@ -130,6 +129,16 @@ interface SettingsPageProps {
   onWidgetProviderIdsChange: (value: WidgetProviderIds) => void;
   widgetProviderMetrics: WidgetProviderMetrics;
   onWidgetProviderMetricsChange: (value: WidgetProviderMetrics) => void;
+  menuBarWidgetBackdrop: MenuBarWidgetBackdrop;
+  onMenuBarWidgetBackdropChange: (value: MenuBarWidgetBackdrop) => void;
+  menuBarWidgetStyle: MenuBarWidgetStyle;
+  onMenuBarWidgetStyleChange: (value: MenuBarWidgetStyle) => void;
+  menuBarWidgetColors: MenuBarWidgetColors;
+  onMenuBarWidgetColorsChange: (value: MenuBarWidgetColors) => void;
+  menuBarWidgetTextColors: MenuBarWidgetTextColors;
+  onMenuBarWidgetTextColorsChange: (value: MenuBarWidgetTextColors) => void;
+  menuBarWidgetToneModes: MenuBarWidgetToneModes;
+  onMenuBarWidgetToneModesChange: (value: MenuBarWidgetToneModes) => void;
   activeTab?: string;
   onActiveTabChange?: (tab: string) => void;
 }
@@ -138,14 +147,10 @@ export function SettingsPage({
   plugins,
   onReorder,
   onToggle,
-  autoUpdateInterval,
-  onAutoUpdateIntervalChange,
   themeMode,
   onThemeModeChange,
   resetTimerDisplayMode,
   onResetTimerDisplayModeChange,
-  globalShortcut,
-  onGlobalShortcutChange,
   statsShortcut,
   onStatsShortcutChange,
   startOnLogin,
@@ -157,6 +162,16 @@ export function SettingsPage({
   onWidgetProviderIdsChange,
   widgetProviderMetrics,
   onWidgetProviderMetricsChange,
+  menuBarWidgetBackdrop,
+  onMenuBarWidgetBackdropChange,
+  menuBarWidgetStyle,
+  onMenuBarWidgetStyleChange,
+  menuBarWidgetColors,
+  onMenuBarWidgetColorsChange,
+  menuBarWidgetTextColors,
+  onMenuBarWidgetTextColorsChange,
+  menuBarWidgetToneModes,
+  onMenuBarWidgetToneModesChange,
   activeTab,
   onActiveTabChange,
 }: SettingsPageProps) {
@@ -203,29 +218,8 @@ export function SettingsPage({
       <section>
         <h3 className="text-lg font-semibold mb-0">Auto Refresh</h3>
         <p className="text-sm text-muted-foreground mb-2">
-          How obsessive are you
+          Every 5 minutes. Providers that rate-limit OpenUsage are retried later automatically; use Refresh to update now.
         </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Auto-update interval">
-            {AUTO_UPDATE_OPTIONS.map((option) => {
-              const isActive = option.value === autoUpdateInterval;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onAutoUpdateIntervalChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
       </section>
       <section>
         <h3 className="text-lg font-semibold mb-0">Reset Timers</h3>
@@ -346,19 +340,23 @@ export function SettingsPage({
         onWidgetProviderIdsChange={onWidgetProviderIdsChange}
         widgetProviderMetrics={widgetProviderMetrics}
         onWidgetProviderMetricsChange={onWidgetProviderMetricsChange}
+        menuBarWidgetBackdrop={menuBarWidgetBackdrop}
+        onMenuBarWidgetBackdropChange={onMenuBarWidgetBackdropChange}
+        menuBarWidgetStyle={menuBarWidgetStyle}
+        onMenuBarWidgetStyleChange={onMenuBarWidgetStyleChange}
+        menuBarWidgetColors={menuBarWidgetColors}
+        onMenuBarWidgetColorsChange={onMenuBarWidgetColorsChange}
+        menuBarWidgetTextColors={menuBarWidgetTextColors}
+        onMenuBarWidgetTextColorsChange={onMenuBarWidgetTextColorsChange}
+        menuBarWidgetToneModes={menuBarWidgetToneModes}
+        onMenuBarWidgetToneModesChange={onMenuBarWidgetToneModesChange}
       />
       </TabsContent>
 
       <TabsContent value="shortcuts" className="space-y-4">
       <GlobalShortcutSection
-        globalShortcut={globalShortcut}
-        onGlobalShortcutChange={onGlobalShortcutChange}
-      />
-      <GlobalShortcutSection
         globalShortcut={statsShortcut}
         onGlobalShortcutChange={onStatsShortcutChange}
-        title="Stats Shortcut"
-        description="Show or hide the stats popup"
       />
       </TabsContent>
     </Tabs>

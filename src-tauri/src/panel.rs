@@ -1,5 +1,7 @@
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size};
+use tauri::{AppHandle, Emitter, Manager, Position, Size};
 
+#[cfg(not(target_os = "macos"))]
+use tauri::PhysicalPosition;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(not(target_os = "macos"))]
@@ -194,9 +196,6 @@ macro_rules! get_or_init_panel {
     };
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) use get_or_init_panel;
-
 pub fn reposition_panel(app_handle: &AppHandle) {
     position_panel_from_tray(app_handle);
 }
@@ -302,9 +301,19 @@ fn position_panel_from_tray(app_handle: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn show_panel(app_handle: &AppHandle) {
+    crate::macos_dock::run_main(app_handle, show_panel_on_main);
+}
+
+/// Opens the transient popup: no Dock icon, no Cmd-Tab entry, positioned under the
+/// tray icon, key; click-outside hides it (see the resign-key handler in `init`).
+#[cfg(target_os = "macos")]
+fn show_panel_on_main(app_handle: &AppHandle) {
     if let Some(panel) = get_or_init_panel!(app_handle) {
         panel.show_and_make_key();
         position_panel_from_tray(app_handle);
+        crate::taskbar::refresh_menu_bar_appearance();
+        // The panel always hangs from the menu bar; the nav icons follow this side.
+        let _ = app_handle.emit("panel:anchor", "top");
         // Always reopen on the Stats view (also dismisses a leftover About overlay).
         let _ = app_handle.emit("tray:navigate", "home");
     }
@@ -439,9 +448,11 @@ pub fn show_panel(app_handle: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn hide_panel(app_handle: &AppHandle) {
-    if let Ok(panel) = app_handle.get_webview_panel("main") {
-        panel.hide();
-    }
+    crate::macos_dock::run_main(app_handle, |app_handle| {
+        if let Ok(panel) = app_handle.get_webview_panel("main") {
+            panel.hide();
+        }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -457,17 +468,19 @@ pub fn hide_panel(app_handle: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub fn toggle_panel(app_handle: &AppHandle) {
-    let Some(panel) = get_or_init_panel!(app_handle) else {
-        return;
-    };
+    crate::macos_dock::run_main(app_handle, |app_handle| {
+        let Some(panel) = get_or_init_panel!(app_handle) else {
+            return;
+        };
 
-    if panel.is_visible() {
-        log::debug!("toggle_panel: hiding panel");
-        panel.hide();
-    } else {
-        log::debug!("toggle_panel: showing panel");
-        show_panel(app_handle);
-    }
+        if panel.is_visible() {
+            log::debug!("toggle_panel: hiding panel");
+            panel.hide();
+        } else {
+            log::debug!("toggle_panel: showing panel");
+            show_panel_on_main(app_handle);
+        }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -518,16 +531,18 @@ pub fn init(app_handle: &tauri::AppHandle) -> tauri::Result<()> {
     // Configure panel behavior
     panel.set_level(PanelLevel::MainMenu.value() + 1);
 
+    // can_join_all_spaces + full_screen_auxiliary: lets the popup appear over a
+    // full-screen app's Space (move_to_active_space does not).
     panel.set_collection_behavior(
         CollectionBehavior::new()
-            .move_to_active_space()
+            .can_join_all_spaces()
             .full_screen_auxiliary()
             .value(),
     );
 
     panel.set_style_mask(StyleMask::empty().nonactivating_panel().value());
 
-    // Set up event handler to hide panel when it loses focus
+    // Set up event handler to hide panel when it loses focus (click-outside-to-close)
     let event_handler = OpenUsagePanelEventHandler::new();
 
     let handle = app_handle.clone();

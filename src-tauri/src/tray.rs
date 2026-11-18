@@ -1,13 +1,11 @@
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter};
-use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::log_path;
 use crate::panel::{show_panel, toggle_panel_from_tray};
 
 const LOG_LEVEL_STORE_KEY: &str = "logLevel";
@@ -72,35 +70,39 @@ fn toggle_panel_from_tray_event(app_handle: &AppHandle, event: TrayIconEvent) {
     toggle_panel_from_tray(app_handle);
 }
 
-pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
-    // Same icon as the taskbar/window icon.
-    let icon = app_handle
+/// macOS: monochrome template image so the menu bar tints it for light/dark.
+#[cfg(target_os = "macos")]
+pub(crate) fn tray_icon(app_handle: &AppHandle) -> tauri::Result<tauri::image::Image<'static>> {
+    use tauri::Manager;
+    let path = app_handle
+        .path()
+        .resolve("icons/tray-icon.png", tauri::path::BaseDirectory::Resource)?;
+    tauri::image::Image::from_path(path)
+}
+
+/// Windows/Linux: same icon as the taskbar/window icon.
+#[cfg(not(target_os = "macos"))]
+fn tray_icon(app_handle: &AppHandle) -> tauri::Result<tauri::image::Image<'static>> {
+    Ok(app_handle
         .default_window_icon()
         .cloned()
-        .expect("default window icon must be configured");
+        .expect("default window icon must be configured"))
+}
+
+pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
+    let icon = tray_icon(app_handle)?;
 
     // Load persisted log level
     log::set_max_level(get_stored_log_level(app_handle));
 
     let show_stats = MenuItem::with_id(app_handle, "show_stats", "Show Stats", true, None::<&str>)?;
-    let copy_log_path = MenuItem::with_id(
-        app_handle,
-        "copy_log_path",
-        "Copy Log Path",
-        true,
-        None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app_handle)?;
-    let about = MenuItem::with_id(app_handle, "about", "About WinUsage", true, None::<&str>)?;
     let quit = MenuItem::with_id(app_handle, "quit", "Quit", true, None::<&str>)?;
 
-    let menu = Menu::with_items(
-        app_handle,
-        &[&show_stats, &copy_log_path, &separator, &about, &quit],
-    )?;
+    let menu = Menu::with_items(app_handle, &[&show_stats, &quit])?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("OpenUsage")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -111,29 +113,10 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
                     // show_panel emits tray:navigate "home" to land on Stats.
                     show_panel(app_handle);
                 }
-                "about" => {
-                    show_panel(app_handle);
-                    let _ = app_handle.emit("tray:show-about", ());
-                }
                 "quit" => {
                     log::info!("quit requested via tray");
                     app_handle.exit(0);
                 }
-                "copy_log_path" => match log_path::for_app(app_handle) {
-                    Ok(path) => {
-                        if let Err(error) = app_handle
-                            .clipboard()
-                            .write_text(path.to_string_lossy().to_string())
-                        {
-                            log::error!("failed to copy log path to clipboard: {}", error);
-                        } else {
-                            log::info!("copied log path to clipboard");
-                        }
-                    }
-                    Err(error) => {
-                        log::error!("failed to resolve log path: {}", error);
-                    }
-                },
                 _ => {}
             }
         })

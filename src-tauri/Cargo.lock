@@ -3346,10 +3346,11 @@ dependencies = [
 
 [[package]]
 name = "openusage"
-version = "0.6.26"
+version = "0.7.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "block2",
  "dirs 6.0.0",
  "libc",
  "log",
@@ -3361,6 +3362,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rquickjs",
  "rusqlite",
+ "security-framework",
  "serde",
  "serde_json",
  "serial_test",

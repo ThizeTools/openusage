@@ -77,6 +77,7 @@ export const makeCtx = () => {
       http: {
         request: vi.fn(),
       },
+      signalRateLimit: vi.fn(),
       ls: {
         discover: vi.fn(() => null),
       },

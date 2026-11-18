@@ -29,6 +29,44 @@ pub struct CachedPluginSnapshot {
     pub fetched_at: String,
 }
 
+/// A cached probe output handed to the frontend: the plain `PluginOutput` plus when it was fetched
+/// (epoch ms), so the app can tell how fresh the data is after a relaunch.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedProbeOutput {
+    #[serde(flatten)]
+    pub output: PluginOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<i64>,
+}
+
+/// RFC3339 snapshot timestamp as epoch milliseconds. None when it does not parse.
+pub fn fetched_at_ms(fetched_at: &str) -> Option<i64> {
+    let parsed =
+        time::OffsetDateTime::parse(fetched_at, &time::format_description::well_known::Rfc3339)
+            .ok()?;
+    i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
+}
+
+/// The frontend-facing output for a cached snapshot, carrying its `fetchedAt` in ms.
+pub fn snapshot_to_cached_output(
+    snapshot: CachedPluginSnapshot,
+    icon_url: String,
+) -> CachedProbeOutput {
+    let fetched_at = fetched_at_ms(&snapshot.fetched_at);
+    CachedProbeOutput {
+        output: PluginOutput {
+            provider_id: snapshot.provider_id,
+            display_name: snapshot.display_name,
+            plan: snapshot.plan,
+            lines: snapshot.lines,
+            icon_url,
+            failure: None,
+        },
+        fetched_at,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageApiCacheFile {
@@ -358,6 +396,7 @@ mod tests {
                 subtitle: None,
             }],
             icon_url: String::new(),
+            failure: None,
         }
     }
 
@@ -436,6 +475,46 @@ mod tests {
         assert!(json.get("fetchedAt").is_some());
         assert!(json.get("fetched_at").is_none());
         assert_eq!(json["fetchedAt"], "2026-03-26T08:15:30Z");
+    }
+
+    #[test]
+    fn fetched_at_ms_parses_rfc3339_to_epoch_ms() {
+        assert_eq!(fetched_at_ms("2026-03-26T08:15:30Z"), Some(1_774_512_930_000));
+        assert_eq!(
+            fetched_at_ms("2026-03-26T08:15:30.250Z"),
+            Some(1_774_512_930_250)
+        );
+        assert_eq!(
+            fetched_at_ms("2026-03-26T10:15:30+02:00"),
+            Some(1_774_512_930_000)
+        );
+        assert_eq!(fetched_at_ms(""), None);
+        assert_eq!(fetched_at_ms("not a date"), None);
+    }
+
+    #[test]
+    fn snapshot_maps_to_cached_output_with_fetched_at() {
+        let cached =
+            snapshot_to_cached_output(make_snapshot("claude", "Claude"), "icon".to_string());
+        assert_eq!(cached.fetched_at, Some(1_774_512_930_000));
+        assert_eq!(cached.output.provider_id, "claude");
+        assert_eq!(cached.output.icon_url, "icon");
+        assert!(cached.output.failure.is_none());
+
+        let json = serde_json::to_value(&cached).unwrap();
+        assert_eq!(json["fetchedAt"], 1_774_512_930_000_i64);
+        assert_eq!(json["providerId"], "claude");
+        assert!(json.get("failure").is_none());
+    }
+
+    #[test]
+    fn snapshot_with_unparseable_timestamp_omits_fetched_at() {
+        let mut snapshot = make_snapshot("claude", "Claude");
+        snapshot.fetched_at = "garbage".to_string();
+        let cached = snapshot_to_cached_output(snapshot, String::new());
+        assert_eq!(cached.fetched_at, None);
+        let json = serde_json::to_value(&cached).unwrap();
+        assert!(json.get("fetchedAt").is_none());
     }
 
     #[test]

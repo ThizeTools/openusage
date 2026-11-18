@@ -28,6 +28,7 @@ function GaugeIcon({ className }: { className?: string }) {
 import { cn } from "@/lib/utils"
 import { getIconColor } from "@/lib/color"
 import { useDarkMode } from "@/hooks/use-dark-mode"
+import type { PanelAnchor } from "@/hooks/app/use-panel-anchor"
 
 type ActiveView = "home" | "settings" | string
 
@@ -47,6 +48,8 @@ interface SideNavProps {
   onPluginContextAction?: (pluginId: string, action: PluginContextAction) => void
   isPluginRefreshAvailable?: (pluginId: string) => boolean
   onReorder?: (orderedIds: string[]) => void
+  /** Side of the screen the panel hangs from; the nav puts Home on the side nearest the bar. Defaults to "bottom". */
+  anchor?: PanelAnchor
 }
 
 interface NavButtonProps {
@@ -137,6 +140,7 @@ export function SideNav({
   onPluginContextAction,
   isPluginRefreshAvailable,
   onReorder,
+  anchor = "bottom",
 }: SideNavProps) {
   const isDark = useDarkMode()
 
@@ -205,53 +209,56 @@ export function SideNav({
     [isPluginRefreshAvailable, onPluginContextAction]
   )
 
+  const settingsButton = (
+    <NavButton
+      isActive={false}
+      onClick={() => {
+        invoke("open_settings_window").catch(console.error)
+      }}
+      aria-label="Settings"
+    >
+      <Settings className="size-6" />
+    </NavButton>
+  )
+
+  const pluginIcons = (
+    <div className="flex min-h-0 flex-col overflow-y-auto scrollbar-none">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={plugins.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+          {plugins.map((plugin) => (
+            <SortableNavPlugin
+              key={plugin.id}
+              plugin={plugin}
+              isActive={activeView === plugin.id}
+              isDark={isDark}
+              onClick={() => onViewChange(plugin.id)}
+              onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
+    </div>
+  )
+
+  const homeButton = (
+    <NavButton isActive={activeView === "home"} onClick={() => onViewChange("home")} aria-label="Home">
+      <GaugeIcon className="size-6 dark:text-page-accent" />
+    </NavButton>
+  )
+
+  // Same icon order on both sides (Settings, plugins, Home); the group hugs the bar the panel hangs from.
+  const icons = (
+    <div className="flex min-h-0 flex-col">
+      {settingsButton}
+      {pluginIcons}
+      {homeButton}
+    </div>
+  )
   return (
     <nav className="flex flex-col w-12 border-r bg-muted/50 dark:bg-card py-3">
-      <div className="flex-1" />
-      <div className="flex min-h-0 flex-col">
-        <NavButton
-          isActive={false}
-          onClick={() => {
-            invoke("open_settings_window").catch(console.error)
-          }}
-          aria-label="Settings"
-        >
-          <Settings className="size-6" />
-        </NavButton>
-
-        {/* Plugin icons */}
-        <div className="flex min-h-0 flex-col overflow-y-auto scrollbar-none">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={plugins.map((p) => p.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {plugins.map((plugin) => (
-                <SortableNavPlugin
-                  key={plugin.id}
-                  plugin={plugin}
-                  isActive={activeView === plugin.id}
-                  isDark={isDark}
-                  onClick={() => onViewChange(plugin.id)}
-                  onContextMenu={(e) => handlePluginContextMenu(e, plugin.id)}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
-        </div>
-
-        <NavButton
-          isActive={activeView === "home"}
-          onClick={() => onViewChange("home")}
-          aria-label="Home"
-        >
-          <GaugeIcon className="size-6 dark:text-page-accent" />
-        </NavButton>
-      </div>
+      {anchor === "bottom" && <div className="flex-1" />}
+      {icons}
+      {anchor === "top" && <div className="flex-1" />}
     </nav>
   )
 }

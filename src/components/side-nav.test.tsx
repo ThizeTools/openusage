@@ -101,4 +101,34 @@ describe("SideNav", () => {
     const buttons = screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))
     expect(buttons).toEqual(["Settings", "Provider", "Home"])
   })
+
+  describe("anchor", () => {
+    const plugins = [
+      { id: "p1", name: "Plugin 1", iconUrl: "a.svg" },
+      { id: "p2", name: "Plugin 2", iconUrl: "b.svg" },
+    ]
+    const order = () =>
+      screen
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"))
+
+    it("bottom (default): Settings, plugins, Home, with the spacer on top", () => {
+      const { container } = render(<SideNav activeView="home" onViewChange={vi.fn()} plugins={plugins} />)
+      expect(order()).toEqual(["Settings", "Plugin 1", "Plugin 2", "Home"])
+      expect(container.querySelector("nav")!.firstElementChild).toHaveClass("flex-1")
+    })
+
+    it("top: same order (Settings, plugins, Home), with the spacer at the bottom", () => {
+      const { container } = render(<SideNav activeView="home" onViewChange={vi.fn()} plugins={plugins} anchor="top" />)
+      expect(order()).toEqual(["Settings", "Plugin 1", "Plugin 2", "Home"])
+      expect(container.querySelector("nav")!.lastElementChild).toHaveClass("flex-1")
+    })
+
+    it("keeps navigation working when anchored to the top", async () => {
+      const onViewChange = vi.fn()
+      render(<SideNav activeView="home" onViewChange={onViewChange} plugins={plugins} anchor="top" />)
+      await userEvent.click(screen.getByRole("button", { name: "Plugin 2" }))
+      expect(onViewChange).toHaveBeenCalledWith("p2")
+    })
+  })
 })

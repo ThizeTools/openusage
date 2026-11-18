@@ -31,9 +31,9 @@ export function ProviderDetailPage({
       showSeparator={false}
       loading={plugin.loading}
       error={plugin.error}
+      notice={plugin.notice}
       lines={plugin.data?.lines ?? []}
       skeletonLines={plugin.meta.lines}
-      lastManualRefreshAt={plugin.lastManualRefreshAt}
       lastUpdatedAt={plugin.lastUpdatedAt}
       onRetry={onRetry}
       scopeFilter="all"

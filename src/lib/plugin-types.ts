@@ -35,12 +35,26 @@ export type PluginLink = {
   url: string
 }
 
+/** Why a probe did not succeed, classified by the runtime. Drives the refresh backoff. */
+export type PluginFailure = {
+  kind: "rateLimited" | "unreachable" | "refused"
+  /** Provider's Retry-After in seconds, only for rateLimited. */
+  retryAfterSeconds?: number
+}
+
 export type PluginOutput = {
   providerId: string
   displayName: string
   plan?: string
   lines: MetricLine[]
   iconUrl: string
+  /** Absent for a clean probe. */
+  failure?: PluginFailure
+}
+
+/** A persisted last-good output from `get_cached_probe_outputs`, with when it was fetched (epoch ms). */
+export type CachedPluginOutput = PluginOutput & {
+  fetchedAt?: number
 }
 
 export type PluginMeta = {
@@ -59,6 +73,8 @@ export type PluginDisplayState = {
   data: PluginOutput | null
   loading: boolean
   error: string | null
+  /** Informational line shown instead of an error, e.g. the provider asked us to wait. */
+  notice?: string | null
   lastManualRefreshAt: number | null
   lastUpdatedAt: number | null
 }

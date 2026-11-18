@@ -3,18 +3,35 @@ use tauri::{AppHandle, Manager};
 pub const SETTINGS_LABEL: &str = "settings";
 
 /// Shows (or reveals) the dedicated Settings window, bringing it to the front.
+/// On macOS the app becomes a Regular app (Dock icon, Cmd-Tab) while it is open.
 pub fn open(app_handle: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    crate::macos_dock::run_main(app_handle, open_now);
+    #[cfg(not(target_os = "macos"))]
+    open_now(app_handle);
+}
+
+fn open_now(app_handle: &AppHandle) {
     let Some(window) = app_handle.get_webview_window(SETTINGS_LABEL) else {
         log::error!("Settings window not found");
         return;
     };
     apply_rounded_corners(&window);
+    // Hides the panel (it would float over Settings) and switches to Regular.
+    #[cfg(target_os = "macos")]
+    crate::macos_dock::prepare_for_settings(app_handle);
     if let Err(error) = window.show() {
         log::error!("Failed to show settings window: {}", error);
         return;
     }
     let _ = window.unminimize();
     let _ = window.set_focus();
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_dock::activate();
+        // The policy switch can make macOS deactivate the app for a moment.
+        crate::macos_dock::reactivate_next_tick(app_handle);
+    }
 }
 
 /// The Settings window is frameless (`decorations: false`). On Windows 11 the

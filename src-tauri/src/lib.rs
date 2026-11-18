@@ -1,6 +1,8 @@
 #[cfg(target_os = "macos")]
 mod app_nap;
 mod config;
+#[cfg(target_os = "macos")]
+mod macos_dock;
 mod local_http_api;
 mod log_path;
 mod panel;
@@ -27,7 +29,6 @@ use uuid::Uuid;
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-const GLOBAL_SHORTCUT_STORE_KEY: &str = "globalShortcut";
 const STATS_SHORTCUT_STORE_KEY: &str = "statsShortcut";
 const DAILY_ACTIVE_TRACKED_DAY_KEY: &str = "analytics.daily_active_day";
 const DAILY_ACTIVE_EVENT_NAME: &str = "app_started";
@@ -124,27 +125,9 @@ fn spawn_daily_active_rollover_tracker(app_handle: tauri::AppHandle) {
 }
 
 #[cfg(desktop)]
-fn managed_shortcut_slot() -> &'static Mutex<Option<String>> {
-    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(desktop)]
 fn managed_stats_shortcut_slot() -> &'static Mutex<Option<String>> {
     static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
-}
-
-/// Shared shortcut handler that toggles the taskbar widget when pressed.
-#[cfg(desktop)]
-fn handle_global_shortcut(
-    app: &tauri::AppHandle,
-    event: tauri_plugin_global_shortcut::ShortcutEvent,
-) {
-    if event.state == ShortcutState::Pressed {
-        log::debug!("Widget shortcut triggered");
-        widget::toggle_widget(app);
-    }
 }
 
 /// Shortcut handler that toggles the stats popup (main window) when pressed.
@@ -462,7 +445,7 @@ async fn start_probe_batch(
                         let has_error = output.lines.iter().any(|line| {
                             matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
                         });
-                        if has_error {
+                        if has_error || output.failure.is_some() {
                             log::warn!("probe {} completed with error", plugin_id);
                         } else {
                             log::info!(
@@ -507,22 +490,6 @@ async fn start_probe_batch(
 #[tauri::command]
 fn get_log_path(app_handle: tauri::AppHandle) -> Result<String, String> {
     log_path::for_app(&app_handle).map(|path| path.to_string_lossy().to_string())
-}
-
-/// Update the global shortcut registration.
-/// Pass `null` to disable the shortcut, or a shortcut string like "CommandOrControl+Shift+U".
-#[cfg(desktop)]
-#[tauri::command]
-fn update_global_shortcut(
-    app_handle: tauri::AppHandle,
-    shortcut: Option<String>,
-) -> Result<(), String> {
-    apply_managed_shortcut(
-        &app_handle,
-        managed_shortcut_slot(),
-        shortcut,
-        handle_global_shortcut,
-    )
 }
 
 /// Update the shortcut that toggles the stats popup. `null` disables it.
@@ -601,7 +568,7 @@ fn list_plugins(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PluginMeta> {
 #[tauri::command]
 fn get_cached_probe_outputs(
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Vec<plugin_engine::runtime::PluginOutput> {
+) -> Vec<local_http_api::CachedProbeOutput> {
     let icon_urls: HashMap<String, String> = {
         let locked = state.lock().expect("plugin state poisoned");
         accounts::expand_plugins(&locked.plugins)
@@ -612,15 +579,12 @@ fn get_cached_probe_outputs(
 
     local_http_api::cached_snapshots()
         .into_iter()
-        .map(|snapshot| plugin_engine::runtime::PluginOutput {
-            icon_url: icon_urls
+        .map(|snapshot| {
+            let icon_url = icon_urls
                 .get(&snapshot.provider_id)
                 .cloned()
-                .unwrap_or_default(),
-            provider_id: snapshot.provider_id,
-            display_name: snapshot.display_name,
-            plan: snapshot.plan,
-            lines: snapshot.lines,
+                .unwrap_or_default();
+            local_http_api::snapshot_to_cached_output(snapshot, icon_url)
         })
         .collect()
 }
@@ -668,6 +632,7 @@ pub fn run() {
             toggle_widget,
             set_widget_visible,
             taskbar::taskbar_widget_update,
+            taskbar::menu_bar_appearance,
             accounts::list_accounts,
             accounts::list_account_providers,
             accounts::start_account_login,
@@ -681,12 +646,14 @@ pub fn run() {
             list_plugins,
             get_cached_probe_outputs,
             get_log_path,
-            update_global_shortcut,
             update_stats_shortcut
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                macos_dock::install_menu(app)?;
+            }
 
             #[cfg(target_os = "macos")]
             {
@@ -742,15 +709,9 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            // Register global shortcuts from stored settings (widget + stats).
+            // Register the global shortcut (toggles the stats panel) from stored settings.
             #[cfg(desktop)]
             {
-                register_initial_shortcut(
-                    app.handle(),
-                    GLOBAL_SHORTCUT_STORE_KEY,
-                    managed_shortcut_slot(),
-                    handle_global_shortcut,
-                );
                 register_initial_shortcut(
                     app.handle(),
                     STATS_SHORTCUT_STORE_KEY,
@@ -761,11 +722,18 @@ pub fn run() {
 
             // Keep the Settings window alive across closes: hide instead of destroy.
             if let Some(settings) = app.get_webview_window(settings_window::SETTINGS_LABEL) {
+                // macOS: native title bar (traffic lights) instead of the custom
+                // Windows-style one the frontend draws on other platforms.
+                #[cfg(target_os = "macos")]
+                let _ = settings.set_decorations(true);
                 let handle = settings.clone();
                 settings.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = handle.hide();
+                        // Back to a menu-bar-only app (no Dock icon / Cmd-Tab entry).
+                        #[cfg(target_os = "macos")]
+                        macos_dock::settings_hidden();
                     }
                 });
             }
@@ -792,7 +760,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, event| match event {
+        .run(|_app_handle, event| match event {
+            // Dock icon click (only present while Settings is open): bring Settings forward.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => macos_dock::handle_reopen(_app_handle),
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 local_http_api::flush_cache();
             }

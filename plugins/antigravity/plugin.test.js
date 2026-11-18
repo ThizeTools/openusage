@@ -170,4 +170,34 @@ describe("antigravity plugin", () => {
     expect(() => plugin.probe(ctx)).toThrow(SIGN_IN)
     expect(ctx.account.saveCredentials).not.toHaveBeenCalled()
   })
+
+  const limitedRoutes = (ctx, headers) => {
+    const limited = { status: 429, headers, bodyText: "{}" }
+    route(ctx, {
+      [LOAD_URL]: json({ paidTier: { id: "g1-pro-tier" } }),
+      [DAILY_QUOTA_URL]: limited,
+      [PROD_QUOTA_URL]: limited,
+      [USERINFO_URL]: json({ email: "dev@example.com" }),
+    })
+  }
+
+  it("signals a rate limit with the Retry-After wait when the quota read answers 429", async () => {
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "tok", refresh_token: "rt", expiresAt: NOW_MS + 3600 * 1000 })
+    limitedRoutes(ctx, { "retry-after": "90" })
+
+    const plugin = await loadPlugin()
+    expect(() => plugin.probe(ctx)).toThrow("HTTP 429")
+    expect(ctx.host.signalRateLimit).toHaveBeenCalledWith(90)
+  })
+
+  it("signals a rate limit without a wait when the 429 has no Retry-After", async () => {
+    const ctx = makeCtx()
+    ctx.account = makeAccount({ access_token: "tok", refresh_token: "rt", expiresAt: NOW_MS + 3600 * 1000 })
+    limitedRoutes(ctx, {})
+
+    const plugin = await loadPlugin()
+    expect(() => plugin.probe(ctx)).toThrow("HTTP 429")
+    expect(ctx.host.signalRateLimit).toHaveBeenCalledWith(null)
+  })
 })

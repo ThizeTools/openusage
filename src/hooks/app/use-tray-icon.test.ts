@@ -81,7 +81,7 @@ describe("useTrayIcon", () => {
     getByIdMock.mockResolvedValue(makeTray())
   })
 
-  it("updates title and tooltip but never touches the static icon", async () => {
+  it("updates the tooltip but never touches the static icon or title", async () => {
     const tray = makeTray()
     getByIdMock.mockResolvedValue(tray)
 
@@ -95,7 +95,7 @@ describe("useTrayIcon", () => {
     )
 
     await waitFor(() => expect(tray.setTooltip).toHaveBeenCalledWith(expect.stringContaining("OpenUsage")))
-    expect(tray.setTitle).toHaveBeenCalledWith("")
+    expect(tray.setTitle).not.toHaveBeenCalled()
     expect(tray.setTooltip).toHaveBeenCalledWith(expect.stringContaining("Claude: --%"))
     // Icon is set once in Rust (app/taskbar icon); frontend must not override it.
     expect(tray.setIcon).not.toHaveBeenCalled()

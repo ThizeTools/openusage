@@ -5,7 +5,7 @@ import { LazyStore } from "@tauri-apps/plugin-store"
 import { useProbeState } from "@/hooks/app/use-probe-state"
 import { useAccountsChanged } from "@/hooks/app/use-accounts-changed"
 import { useNowTicker } from "@/hooks/use-now-ticker"
-import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
+import type { CachedPluginOutput, PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import { loadAvailablePlugins, reloadPluginList } from "@/lib/provider-discovery"
 import {
   DEFAULT_PLUGIN_SETTINGS,
@@ -30,7 +30,7 @@ type ProbeResultEvent = { batchId: string; output: PluginOutput }
  * stays live through `probe:result` events and syncs widget settings.
  */
 export function useWidgetRows(): WidgetRow[] {
-  const { pluginStates, handleProbeResult } = useProbeState({})
+  const { pluginStates, handleProbeResult, hydrateFromCache } = useProbeState({})
 
   const [pluginsMeta, setPluginsMeta] = useState<PluginMeta[]>([])
   const [pluginSettings, setPluginSettings] = useState<PluginSettings | null>(null)
@@ -82,10 +82,8 @@ export function useWidgetRows(): WidgetRow[] {
         setPluginSettings(defaultSettings)
 
         try {
-          const cachedOutputs = await invoke<PluginOutput[]>("get_cached_probe_outputs")
-          if (!cancelled) {
-            for (const output of cachedOutputs) handleProbeResult(output)
-          }
+          const cachedOutputs = await invoke<CachedPluginOutput[]>("get_cached_probe_outputs")
+          if (!cancelled) hydrateFromCache(cachedOutputs)
         } catch (error) {
           console.error("Failed to hydrate widget provider cache:", error)
         }
@@ -117,7 +115,7 @@ export function useWidgetRows(): WidgetRow[] {
     return () => {
       cancelled = true
     }
-  }, [handleProbeResult])
+  }, [hydrateFromCache])
 
   // Accounts added/removed/renamed: reload the plugin list. The main window probes new ids.
   useAccountsChanged(() => {

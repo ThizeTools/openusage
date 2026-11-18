@@ -177,8 +177,23 @@
     }
     if (responses.some(function (r) { return r.status === 403 })) throw SIGN_IN
     var limited = responses.filter(function (r) { return r.status === 429 })
-    if (limited.length > 0) throw "Antigravity request failed (HTTP 429). Try again later."
+    if (limited.length > 0) {
+      ctx.host.signalRateLimit(shortestRetryAfter(limited))
+      throw "Antigravity request failed (HTTP 429). Try again later."
+    }
     throw UNAVAILABLE
+  }
+
+  // Shortest positive Retry-After (seconds) among the responses, or null when none carries one.
+  function shortestRetryAfter(responses) {
+    var best = null
+    responses.forEach(function (r) {
+      var headers = r.headers || {}
+      var raw = headers["retry-after"] || headers["Retry-After"]
+      var seconds = Number(raw)
+      if (raw && Number.isFinite(seconds) && seconds > 0 && (best === null || seconds < best)) best = seconds
+    })
+    return best
   }
 
   function summaryGroups(body) {
