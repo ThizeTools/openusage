@@ -78,13 +78,20 @@ afterEach(() => {
   platform.windows = false
 })
 
-/** Opens an accordion section by its title (collapsed by default). */
-const openSection = (title: string) => userEvent.click(screen.getByRole("button", { name: new RegExp(`^${title}`) }))
+/** Selects a pane of the Widget tab's sidebar nav ("Menu Bar" is named "Taskbar" on Windows). */
+const openPane = (name: string) =>
+  userEvent.click(screen.getByRole("tab", { name: name === "Menu Bar" ? /^(Menu Bar|Taskbar)$/ : name }))
+
+/** Opens a section by its title: the Colors pane, or an accordion section (collapsed by default) of the Menu Bar pane. */
+async function openSection(title: string) {
+  if (title === "Colors") return openPane("Colors")
+  await openPane("Menu Bar")
+  await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${title}`) }))
+}
 
 describe("WidgetMetricsSection", () => {
   it("checks the default metrics of an account provider", async () => {
     renderSection()
-    await openSection("Providers")
     // "Session" is shown for Claude (first) and Codex; Claude's comes first.
     const claudeSessionLabel = screen.getAllByText("Session")[0].closest("label")!
     expect(within(claudeSessionLabel).getByRole("checkbox")).toHaveAttribute("aria-checked", "true")
@@ -96,7 +103,6 @@ describe("WidgetMetricsSection", () => {
     const { onWidgetProviderMetricsChange } = renderSection({
       widgetProviderMetrics: { "claude@1a2b3c4d": ["Weekly"] },
     })
-    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).toHaveBeenLastCalledWith({
@@ -114,7 +120,6 @@ describe("WidgetMetricsSection", () => {
     const { onWidgetProviderMetricsChange } = renderSection({
       widgetProviderMetrics: { codex: ["Weekly"] },
     })
-    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).toHaveBeenLastCalledWith({
@@ -125,7 +130,6 @@ describe("WidgetMetricsSection", () => {
 
   it("does not save metric changes for a provider hidden from the widget", async () => {
     const { onWidgetProviderMetricsChange } = renderSection({ widgetProviderIds: ["codex"] })
-    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Sonnet"))
     expect(onWidgetProviderMetricsChange).not.toHaveBeenCalled()
@@ -133,7 +137,6 @@ describe("WidgetMetricsSection", () => {
 
   it("toggling a provider saves the shown provider ids in plugin order", async () => {
     const { onWidgetProviderIdsChange } = renderSection({ widgetProviderIds: ["codex"] })
-    await openSection("Providers")
 
     await userEvent.click(screen.getByLabelText("Claude · work"))
     expect(onWidgetProviderIdsChange).toHaveBeenCalledWith(["claude@1a2b3c4d", "codex"])
@@ -145,6 +148,7 @@ describe("WidgetMetricsSection", () => {
     expect(screen.getByTestId("widget-layout-hybrid")).toBeInTheDocument()
     expect(screen.queryByLabelText("Widget tab layout")).toBeNull()
 
+    await openPane("Menu Bar")
     await userEvent.click(screen.getByText("Show widget in taskbar"))
     expect(onWidgetVisibleChange).toHaveBeenCalledWith(true)
   })
@@ -400,6 +404,7 @@ describe("WidgetMetricsSection", () => {
       const textColors = { label: "color", used: "mono", expected: "mono" } as const
       const toneModes = { ahead: "mono", onTrack: "color", behind: "mono" } as const
       renderSection({ menuBarWidgetTextColors: textColors, menuBarWidgetToneModes: toneModes })
+      await openPane("Menu Bar")
       await waitFor(() => {
         const calls = vi.mocked(renderMenuBarWidgetPng).mock.calls
         expect(calls.map(([, opts]) => opts)).toContainEqual(expect.objectContaining({ textColors, toneModes }))
@@ -451,7 +456,6 @@ describe("WidgetMetricsSection", () => {
       const { onWidgetProviderIdsChange, onWidgetProviderMetricsChange } = renderSection({
         widgetProviderMetrics: { "claude@1a2b3c4d": ["Weekly"] },
       })
-      await openSection("Providers")
       expect(screen.getByTestId("widget-providers-list")).toBeInTheDocument()
 
       await userEvent.click(screen.getByLabelText("Sonnet"))
@@ -463,6 +467,7 @@ describe("WidgetMetricsSection", () => {
     it("the visibility switch reports changes", async () => {
       platform.mac = true
       const { onWidgetVisibleChange } = renderSection({ widgetVisible: false })
+      await openPane("Menu Bar")
       await userEvent.click(screen.getByRole("switch", { name: "Show widget in menu bar" }))
       expect(onWidgetVisibleChange).toHaveBeenCalledWith(true)
     })

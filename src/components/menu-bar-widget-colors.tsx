@@ -120,7 +120,7 @@ export function hasCustomColors(colors: MenuBarWidgetColors): boolean {
 
 /**
  * One row per tone: swatch (opens the native color picker), Mono / Color, hex value, and Reset when customized.
- * Compact: a color dot, the name, Mono / Color, the swatch and Reset (no hex), under a "Pace states" heading.
+ * Compact: a color dot, the name, Mono / Color, the swatch and Reset (no hex), under a "Colors" heading.
  */
 export function MenuBarWidgetColorRows({
   colors,
@@ -135,7 +135,7 @@ export function MenuBarWidgetColorRows({
 
   return (
     <div className={compact ? undefined : "space-y-1"} data-testid="menu-bar-widget-colors">
-      {compact && <h5 className={SECTION_HEADING}>Pace states</h5>}
+      {compact && <h5 className={SECTION_HEADING}>Colors</h5>}
       {TONE_ROWS.map(({ key, label }) => {
         const custom = colors[key]
         const effective = custom ?? defaults[key]

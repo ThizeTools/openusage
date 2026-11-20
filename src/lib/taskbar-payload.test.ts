@@ -22,7 +22,7 @@ describe("buildTaskbarPayload", () => {
     const payload = buildTaskbarPayload([makeRow({ limitedUntilMs, tone: "behind" })])
 
     expect(payload.providers[0]?.items).toEqual([
-      { label: "", value: formatAvailableAt(limitedUntilMs), tone: "neutral" },
+      { label: "", value: formatAvailableAt(limitedUntilMs), tone: "neutral", fraction: null, expectedFraction: null },
     ])
   })
 
@@ -37,22 +37,24 @@ describe("buildTaskbarPayload", () => {
     ])
 
     expect(payload.providers[0]?.items).toEqual([
-      { label: "Session", value: "42%/30%", tone: "behind" },
-      { label: "Weekly", value: "10%", tone: "ahead" },
+      { label: "Session", value: "42%/30%", tone: "behind", fraction: 0.42, expectedFraction: 0.3 },
+      { label: "Weekly", value: "10%", tone: "ahead", fraction: 0.1, expectedFraction: null },
     ])
   })
 
   it("shows a neutral dash when the fraction is unknown", () => {
     const payload = buildTaskbarPayload([makeRow({ fraction: null, tone: "neutral" })])
 
-    expect(payload.providers[0]?.items).toEqual([{ label: "", value: "—", tone: "neutral" }])
+    expect(payload.providers[0]?.items).toEqual([
+      { label: "", value: "—", tone: "neutral", fraction: null, expectedFraction: null },
+    ])
   })
 
   it("shows the single fraction with pace expectation and row tone", () => {
     const payload = buildTaskbarPayload([makeRow({ fraction: 0.5, expectedFraction: 0.25, tone: "on-track" })])
 
     expect(payload.providers[0]?.items).toEqual([
-      { label: "", value: "50%/25%", tone: "on-track" },
+      { label: "", value: "50%/25%", tone: "on-track", fraction: 0.5, expectedFraction: 0.25 },
     ])
   })
 

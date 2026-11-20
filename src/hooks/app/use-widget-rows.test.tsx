@@ -97,14 +97,14 @@ describe("useWidgetRows", () => {
 
     try {
       const { result } = renderHook(() => useWidgetRows())
-      await waitFor(() => expect(result.current.some((row) => row.id === "claude")).toBe(true))
-      expect(result.current.some((row) => row.id === "claude@acc2")).toBe(false)
+      await waitFor(() => expect(result.current.rows.some((row) => row.id === "claude")).toBe(true))
+      expect(result.current.rows.some((row) => row.id === "claude@acc2")).toBe(false)
 
       plugins = [pluginMeta, accountMeta]
       await waitFor(() => expect(onAccountsChanged).toBeDefined())
       act(() => onAccountsChanged?.())
 
-      await waitFor(() => expect(result.current.some((row) => row.id === "claude@acc2")).toBe(true))
+      await waitFor(() => expect(result.current.rows.some((row) => row.id === "claude@acc2")).toBe(true))
       const listCalls = state.invokeMock.mock.calls.filter(([command]) => command === "list_plugins")
       expect(listCalls).toHaveLength(2)
       expect(state.invokeMock).not.toHaveBeenCalledWith("start_probe_batch", expect.anything())
@@ -119,7 +119,7 @@ describe("useWidgetRows", () => {
 
     const { result } = renderHook(() => useWidgetRows())
 
-    await waitFor(() => expect(result.current[0]?.name).toBe("Claude"))
+    await waitFor(() => expect(result.current.rows[0]?.name).toBe("Claude"))
 
     expect(state.invokeMock).toHaveBeenCalledWith("get_cached_probe_outputs")
     expect(state.invokeMock).not.toHaveBeenCalledWith("start_probe_batch", expect.anything())

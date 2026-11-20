@@ -33,10 +33,10 @@ const EXPECTED_MONO_ALPHA = 0.55
 /** Baseline offset from the vertical middle of a row, as a fraction of the value size (font metrics approximation). */
 const BASELINE_FACTOR = 0.35
 
-/** Per-style geometry. Font sizes in pt. */
+/** Per-style geometry. Font sizes in pt. Labels ("S", "Weekly") are as small as the "/expected" part. */
 export const STYLE_METRICS = {
   stacked: {
-    labelSize: 9,
+    labelSize: 9.5 * EXPECTED_SCALE,
     fontSize: 9.5,
     rowHeight: 9.5,
     icon: 15,
@@ -46,7 +46,7 @@ export const STYLE_METRICS = {
     labelAlpha: LABEL_ALPHA,
   },
   compact: {
-    labelSize: 9,
+    labelSize: 9.5 * EXPECTED_SCALE,
     fontSize: 9.5,
     rowHeight: 9.5,
     icon: 15,
@@ -56,7 +56,7 @@ export const STYLE_METRICS = {
     labelAlpha: LABEL_ALPHA,
   },
   inline: {
-    labelSize: 12.5,
+    labelSize: 12.5 * EXPECTED_SCALE,
     fontSize: 12.5,
     icon: 16,
     labelGap: 4,
@@ -66,7 +66,7 @@ export const STYLE_METRICS = {
     sepAlpha: 120 / 255,
   },
   "inline-compact": {
-    labelSize: 12,
+    labelSize: 12.5 * EXPECTED_SCALE,
     fontSize: 12.5,
     icon: 16,
     labelGap: 3,

@@ -317,7 +317,6 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
-    await userEvent.click(await screen.findByRole("button", { name: /^Providers/ }))
     // Alpha's default selection is its only progress metric, Weekly.
     await userEvent.click(await screen.findByLabelText("Weekly"))
     expect(state.saveWidgetProviderMetricsMock).toHaveBeenCalledWith({ a: [] })
@@ -336,6 +335,7 @@ describe("SettingsWindowApp", () => {
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
     await screen.findByTestId("widget-layout-hybrid")
+    await userEvent.click(screen.getByRole("tab", { name: "Menu Bar" }))
     await userEvent.click(await screen.findByText("Show widget in menu bar"))
     await waitFor(() =>
       expect(state.invokeMock).toHaveBeenCalledWith("set_widget_visible", { visible: true })
@@ -346,6 +346,7 @@ describe("SettingsWindowApp", () => {
     render(<SettingsWindowApp />)
     await screen.findByRole("tab", { name: "Widget" })
     await openTab("Widget")
+    await userEvent.click(await screen.findByRole("tab", { name: "Menu Bar" }))
     const label = (await screen.findByText("Show widget in menu bar")).closest("label")!
     expect(within(label).getByRole("switch")).toHaveAttribute("aria-checked", "false")
     await waitFor(() => expect(state.eventHandlers["widget:visibility"]).toBeDefined())

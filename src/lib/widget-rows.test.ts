@@ -3,6 +3,7 @@ import {
   buildWidgetRows,
   getDefaultProviderMetrics,
   getProviderMetricOptions,
+  paceTone,
 } from "@/lib/widget-rows"
 import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
@@ -374,5 +375,43 @@ describe("buildWidgetRows", () => {
       nowMs,
     })
     expect(rows[0].limitedUntilMs).toBeUndefined()
+  })
+})
+
+describe("paceTone with thresholds", () => {
+  it("defaults to 80 / 100", () => {
+    expect(paceTone(0.4, 0.5)).toBe("ahead")
+    expect(paceTone(0.45, 0.5)).toBe("on-track")
+    expect(paceTone(0.6, 0.5)).toBe("behind")
+  })
+
+  it("uses custom limits (ratio <= limit/100)", () => {
+    const thresholds = { healthy: 60, closeToLimit: 120 }
+    expect(paceTone(0.4, 0.5, thresholds)).toBe("on-track") // 80% of pace
+    expect(paceTone(0.3, 0.5, thresholds)).toBe("ahead") // 60% of pace, inclusive
+    expect(paceTone(0.6, 0.5, thresholds)).toBe("on-track") // 120%, inclusive
+    expect(paceTone(0.65, 0.5, thresholds)).toBe("behind")
+  })
+
+  it("keeps used >= 1 as behind and no expected as neutral", () => {
+    const thresholds = { healthy: 60, closeToLimit: 150 }
+    expect(paceTone(1, 5, thresholds)).toBe("behind")
+    expect(paceTone(0.3, undefined, thresholds)).toBe("neutral")
+  })
+
+  it("buildWidgetRows passes the thresholds through", () => {
+    const periodMs = 7 * 24 * 60 * 60 * 1000
+    const nowMs = 1_000_000_000_000
+    const resetsAt = new Date(nowMs + periodMs / 2).toISOString()
+    const args = {
+      pluginsMeta: [meta("claude", ["Weekly"])],
+      pluginSettings: settings(["claude"]),
+      pluginStates: { claude: state("claude", [{ label: "Weekly", used: 45, limit: 100, resetsAt, periodDurationMs: periodMs }]) },
+      nowMs,
+    }
+    // 45% used / 50% expected = 90% of pace
+    expect(buildWidgetRows(args)[0].tone).toBe("on-track")
+    expect(buildWidgetRows({ ...args, paceThresholds: { healthy: 95, closeToLimit: 110 } })[0].tone).toBe("ahead")
+    expect(buildWidgetRows({ ...args, paceThresholds: { healthy: 50, closeToLimit: 80 } })[0].tone).toBe("behind")
   })
 })

@@ -14,6 +14,8 @@ mod paint;
 #[cfg(windows)]
 mod win;
 #[cfg(target_os = "macos")]
+mod dock;
+#[cfg(target_os = "macos")]
 mod mac;
 
 /// One labeled value, e.g. label "Session", value "42/55%", tone "ahead".
@@ -64,6 +66,16 @@ pub struct WidgetImage {
     pub rgba: String,
 }
 
+/// macOS: a transparent PNG drawn over the Dock icon of the app with one of these bundle ids.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct DockOverlay {
+    pub bundle_ids: Vec<String>,
+    /// base64 PNG
+    pub png: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskbarPayload {
@@ -82,6 +94,10 @@ pub struct TaskbarPayload {
     #[serde(default)]
     #[cfg_attr(not(windows), allow(dead_code))]
     pub widget_image: Option<WidgetImage>,
+    /// macOS: overlays drawn over app icons in the Dock; empty/absent = none.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub dock_overlays: Option<Vec<DockOverlay>>,
 }
 
 pub(crate) struct State {
@@ -107,7 +123,10 @@ pub fn taskbar_widget_update(payload: TaskbarPayload) {
     #[cfg(windows)]
     win::notify();
     #[cfg(target_os = "macos")]
-    mac::notify();
+    {
+        mac::notify();
+        dock::notify();
+    }
 }
 
 /// Appearance of the real menu bar / taskbar: "dark" | "light", or null when unknown / not macOS or Windows.
@@ -153,7 +172,10 @@ pub fn init(app_handle: &tauri::AppHandle) {
     #[cfg(windows)]
     win::start(app_handle.clone());
     #[cfg(target_os = "macos")]
-    mac::start(app_handle.clone());
+    {
+        mac::start(app_handle.clone());
+        dock::start(app_handle.clone());
+    }
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = app_handle;
 }

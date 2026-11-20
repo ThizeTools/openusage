@@ -8,14 +8,19 @@ import { useNowTicker } from "@/hooks/use-now-ticker"
 import type { CachedPluginOutput, PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import { loadAvailablePlugins, reloadPluginList } from "@/lib/provider-discovery"
 import {
+  DEFAULT_PACE_THRESHOLDS,
   DEFAULT_PLUGIN_SETTINGS,
   DEFAULT_WIDGET_PROVIDER_METRICS,
+  loadPaceThresholds,
   loadPluginSettings,
   loadWidgetProviderIds,
   loadWidgetProviderMetrics,
   normalizePluginSettings,
+  parsePaceThresholds,
   parseWidgetProviderMetrics,
+  type PaceThresholds,
   type PluginSettings,
+  type SurfaceProvidersOverride,
   type WidgetProviderIds,
   type WidgetProviderMetrics,
 } from "@/lib/settings"
@@ -28,8 +33,12 @@ type ProbeResultEvent = { batchId: string; output: PluginOutput }
 /**
  * Provider rows for the taskbar widget. Hydrates from the shared probe cache,
  * stays live through `probe:result` events and syncs widget settings.
+ * `rows` uses the global provider selection; `rowsFor(selection)` the given one (null = global).
  */
-export function useWidgetRows(): WidgetRow[] {
+export function useWidgetRows(): {
+  rows: WidgetRow[]
+  rowsFor: (selection: SurfaceProvidersOverride | null) => WidgetRow[]
+} {
   const { pluginStates, handleProbeResult, hydrateFromCache } = useProbeState({})
 
   const [pluginsMeta, setPluginsMeta] = useState<PluginMeta[]>([])
@@ -37,6 +46,7 @@ export function useWidgetRows(): WidgetRow[] {
   const [widgetProviderIds, setWidgetProviderIds] = useState<WidgetProviderIds>(null)
   const [widgetProviderMetrics, setWidgetProviderMetrics] =
     useState<WidgetProviderMetrics>(DEFAULT_WIDGET_PROVIDER_METRICS)
+  const [paceThresholds, setPaceThresholds] = useState<PaceThresholds>(DEFAULT_PACE_THRESHOLDS)
 
   // Re-render on a timer so expected-pace fractions advance even without probes.
   const nowMs = useNowTicker({ intervalMs: 30_000 })
@@ -88,7 +98,7 @@ export function useWidgetRows(): WidgetRow[] {
           console.error("Failed to hydrate widget provider cache:", error)
         }
 
-        const [stored, providers, providerMetrics] = await Promise.all([
+        const [stored, providers, providerMetrics, thresholds] = await Promise.all([
           loadPluginSettings().catch((error) => {
             console.error("Failed to load widget provider settings:", error)
             return DEFAULT_PLUGIN_SETTINGS
@@ -101,12 +111,17 @@ export function useWidgetRows(): WidgetRow[] {
             console.error("Failed to load widget provider metrics:", error)
             return DEFAULT_WIDGET_PROVIDER_METRICS
           }),
+          loadPaceThresholds().catch((error) => {
+            console.error("Failed to load pace thresholds:", error)
+            return DEFAULT_PACE_THRESHOLDS
+          }),
         ])
         if (cancelled) return
 
         setPluginSettings(normalizePluginSettings(stored, meta))
         setWidgetProviderIds(providers)
         setWidgetProviderMetrics(providerMetrics)
+        setPaceThresholds(thresholds)
       } catch (error) {
         console.error("Failed to bootstrap widget rows:", error)
       }
@@ -146,6 +161,9 @@ export function useWidgetRows(): WidgetRow[] {
       await subscribe<unknown>("widgetProviderMetrics", (value) =>
         setWidgetProviderMetrics(parseWidgetProviderMetrics(value))
       )
+      await subscribe<unknown>("paceThresholds", (value) =>
+        setPaceThresholds(parsePaceThresholds(value) ?? DEFAULT_PACE_THRESHOLDS)
+      )
       await subscribe<PluginSettings>("plugins", (value) => {
         setPluginsMeta((meta) => {
           setPluginSettings(normalizePluginSettings(value, meta))
@@ -160,12 +178,16 @@ export function useWidgetRows(): WidgetRow[] {
     }
   }, [])
 
-  return buildWidgetRows({
-    pluginsMeta,
-    pluginSettings,
-    pluginStates,
-    widgetProviderIds,
-    widgetProviderMetrics,
-    nowMs,
-  })
+  const rowsFor = (selection: SurfaceProvidersOverride | null) =>
+    buildWidgetRows({
+      pluginsMeta,
+      pluginSettings,
+      pluginStates,
+      widgetProviderIds: selection ? selection.providerIds : widgetProviderIds,
+      widgetProviderMetrics: selection ? selection.providerMetrics : widgetProviderMetrics,
+      paceThresholds,
+      nowMs,
+    })
+
+  return { rows: rowsFor(null), rowsFor }
 }

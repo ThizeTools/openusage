@@ -453,7 +453,7 @@ mod tests {
     }
 
     fn payload(providers: Vec<TaskbarProvider>) -> TaskbarPayload {
-        TaskbarPayload { providers, tooltip: String::new(), menu_bar_image: None, menu_bar_backdrop: None, widget_image: None }
+        TaskbarPayload { providers, tooltip: String::new(), menu_bar_image: None, menu_bar_backdrop: None, widget_image: None, dock_overlays: None }
     }
 
     fn png_header(width: u32, height: u32) -> Vec<u8> {

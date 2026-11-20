@@ -1,6 +1,12 @@
 import type { PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
-import type { PluginSettings, WidgetProviderIds, WidgetProviderMetrics } from "@/lib/settings"
+import {
+  DEFAULT_PACE_THRESHOLDS,
+  type PaceThresholds,
+  type PluginSettings,
+  type WidgetProviderIds,
+  type WidgetProviderMetrics,
+} from "@/lib/settings"
 import { expectedFractionForLine, type ProgressLine } from "@/lib/tray-primary-progress"
 import { clamp01 } from "@/lib/utils"
 
@@ -91,16 +97,20 @@ export function getDefaultProviderMetrics(meta: PluginMeta, output?: PluginOutpu
   return getProviderMetricOptions(meta).slice(0, 2)
 }
 
-/** Pace tone matching the tray icon (getTrayTintColor). */
-function paceTone(usedFraction?: number, expectedFraction?: number): WidgetTone {
+/** Pace tone matching the tray icon (getTrayTintColor); the limits come from the pace thresholds. */
+export function paceTone(
+  usedFraction?: number,
+  expectedFraction?: number,
+  thresholds: PaceThresholds = DEFAULT_PACE_THRESHOLDS
+): WidgetTone {
   if (typeof usedFraction !== "number" || !Number.isFinite(usedFraction)) return "neutral"
   if (usedFraction >= 1) return "behind"
   if (typeof expectedFraction !== "number" || !Number.isFinite(expectedFraction) || expectedFraction <= 0) {
     return "neutral"
   }
   const projectedUsage = usedFraction / expectedFraction
-  if (projectedUsage <= 0.8) return "ahead"
-  if (projectedUsage <= 1) return "on-track"
+  if (projectedUsage <= thresholds.healthy / 100) return "ahead"
+  if (projectedUsage <= thresholds.closeToLimit / 100) return "on-track"
   return "behind"
 }
 
@@ -128,7 +138,8 @@ function buildSelectedMetrics(
   meta: PluginMeta,
   output: PluginOutput | null,
   selected: string[],
-  nowMs: number
+  nowMs: number,
+  thresholds: PaceThresholds
 ): WidgetRowMetric[] {
   if (!output) return []
   const metrics: WidgetRowMetric[] = []
@@ -142,7 +153,7 @@ function buildSelectedMetrics(
       label,
       fraction,
       expectedFraction: expectedFraction ?? null,
-      tone: paceTone(fraction, expectedFraction),
+      tone: paceTone(fraction, expectedFraction, thresholds),
     })
   }
   return metrics
@@ -160,9 +171,11 @@ export function buildWidgetRows(args: {
   pluginStates: Record<string, PluginState | undefined>
   widgetProviderIds?: WidgetProviderIds
   widgetProviderMetrics?: WidgetProviderMetrics
+  paceThresholds?: PaceThresholds
   nowMs?: number
 }): WidgetRow[] {
   const { pluginsMeta, pluginSettings, pluginStates, widgetProviderIds, widgetProviderMetrics = {} } = args
+  const paceThresholds = args.paceThresholds ?? DEFAULT_PACE_THRESHOLDS
   const nowMs = args.nowMs ?? Date.now()
   if (!pluginSettings) return []
 
@@ -184,7 +197,7 @@ export function buildWidgetRows(args: {
     if (selected.length === 0) continue
 
     const limitedUntilMs = getLimitedUntilMs(pluginStates[id], nowMs)
-    const metrics = buildSelectedMetrics(meta, output, selected, nowMs)
+    const metrics = buildSelectedMetrics(meta, output, selected, nowMs, paceThresholds)
     const primary = metrics[0]
     rows.push({
       id,

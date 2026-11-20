@@ -23,6 +23,10 @@ export type GlobalShortcut = string | null;
 export const MENU_BAR_WIDGET_STYLES = ["stacked", "compact", "inline", "inline-compact"] as const;
 export type MenuBarWidgetStyle = (typeof MENU_BAR_WIDGET_STYLES)[number];
 
+/** macOS: usage drawn over each provider's app icon in the Dock. "pill" = value pill under the icon. */
+export const DOCK_OVERLAY_STYLES = ["off", "pill"] as const;
+export type DockOverlayStyle = (typeof DOCK_OVERLAY_STYLES)[number];
+
 /**
  * The menu bar widget's background card: one parametric look instead of presets.
  * `color` is "auto" (follows the menu bar: dark card on a dark bar, white on a light one) or `#rrggbb`.
@@ -35,6 +39,9 @@ export type MenuBarWidgetBackdrop = {
   glass: number;
   blur: number;
 };
+
+/** Pace limits in percent of the expected pace: up to `healthy` is Healthy, up to `closeToLimit` is Close to limit, above is Over pace. */
+export type PaceThresholds = { healthy: number; closeToLimit: number };
 
 /** Custom tone colors as `#rrggbb`; a missing tone uses the built-in color. */
 export type MenuBarWidgetColors = { ahead?: string; onTrack?: string; behind?: string };
@@ -69,11 +76,13 @@ const START_ON_LOGIN_KEY = "startOnLogin";
 const WIDGET_VISIBLE_KEY = "taskbarWidgetVisible";
 const WIDGET_PROVIDER_IDS_KEY = "widgetProviderIds";
 const WIDGET_PROVIDER_METRICS_KEY = "widgetProviderMetrics";
+const PACE_THRESHOLDS_KEY = "paceThresholds";
 // Legacy keys, migrated to MENU_BAR_WIDGET_BACKDROP_KEY when the new key is absent.
 const LEGACY_MENU_BAR_WIDGET_CARD_KEY = "menuBarWidgetCard";
 const LEGACY_MENU_BAR_WIDGET_BACKGROUND_KEY = "menuBarWidgetBackground";
 const MENU_BAR_WIDGET_BACKDROP_KEY = "menuBarWidgetBackdrop";
 const MENU_BAR_WIDGET_STYLE_KEY = "menuBarWidgetStyle";
+const DOCK_OVERLAY_STYLE_KEY = "dockOverlayStyle";
 const MENU_BAR_WIDGET_COLORS_KEY = "menuBarWidgetColors";
 const MENU_BAR_WIDGET_TEXT_COLORS_KEY = "menuBarWidgetTextColors";
 const MENU_BAR_WIDGET_TONE_MODES_KEY = "menuBarWidgetToneModes";
@@ -94,6 +103,8 @@ export const DEFAULT_MENU_BAR_WIDGET_BACKDROP: MenuBarWidgetBackdrop = {
   blur: 50,
 };
 export const DEFAULT_MENU_BAR_WIDGET_STYLE: MenuBarWidgetStyle = "compact";
+export const DEFAULT_PACE_THRESHOLDS: PaceThresholds = { healthy: 80, closeToLimit: 100 };
+export const DEFAULT_DOCK_OVERLAY_STYLE: DockOverlayStyle = "pill";
 export const DEFAULT_MENU_BAR_WIDGET_COLORS: MenuBarWidgetColors = {};
 export const DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS: MenuBarWidgetTextColors = {
   label: "mono",
@@ -397,6 +408,26 @@ export async function saveWidgetProviderMetrics(metrics: WidgetProviderMetrics):
   await store.save();
 }
 
+/** Both limits finite, 5 <= healthy < closeToLimit <= 150; rounded to integers. Anything else -> null. */
+export function parsePaceThresholds(value: unknown): PaceThresholds | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { healthy, closeToLimit } = value as Record<string, unknown>;
+  if (typeof healthy !== "number" || typeof closeToLimit !== "number") return null;
+  if (!Number.isFinite(healthy) || !Number.isFinite(closeToLimit)) return null;
+  const result = { healthy: Math.round(healthy), closeToLimit: Math.round(closeToLimit) };
+  return result.healthy >= 5 && result.healthy < result.closeToLimit && result.closeToLimit <= 150 ? result : null;
+}
+
+export async function loadPaceThresholds(): Promise<PaceThresholds> {
+  const stored = await store.get<unknown>(PACE_THRESHOLDS_KEY);
+  return parsePaceThresholds(stored) ?? { ...DEFAULT_PACE_THRESHOLDS };
+}
+
+export async function savePaceThresholds(value: PaceThresholds): Promise<void> {
+  await store.set(PACE_THRESHOLDS_KEY, value);
+  await store.save();
+}
+
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 
 function clampPercent(value: unknown, fallback: number): number {
@@ -446,6 +477,14 @@ export function parseMenuBarWidgetStyle(value: unknown): MenuBarWidgetStyle | nu
     : null
 }
 
+/** The removed "ring", "bars" and "badge" styles migrate to "pill". */
+export function parseDockOverlayStyle(value: unknown): DockOverlayStyle | null {
+  if (value === "ring" || value === "bars" || value === "badge") return "pill"
+  return typeof value === "string" && (DOCK_OVERLAY_STYLES as readonly string[]).includes(value)
+    ? (value as DockOverlayStyle)
+    : null
+}
+
 export async function loadMenuBarWidgetBackdrop(): Promise<MenuBarWidgetBackdrop> {
   const stored = await store.get<unknown>(MENU_BAR_WIDGET_BACKDROP_KEY)
   const parsed = parseMenuBarWidgetBackdrop(stored)
@@ -475,6 +514,16 @@ export async function loadMenuBarWidgetStyle(): Promise<MenuBarWidgetStyle> {
 
 export async function saveMenuBarWidgetStyle(value: MenuBarWidgetStyle): Promise<void> {
   await store.set(MENU_BAR_WIDGET_STYLE_KEY, value)
+  await store.save()
+}
+
+export async function loadDockOverlayStyle(): Promise<DockOverlayStyle> {
+  const stored = await store.get<unknown>(DOCK_OVERLAY_STYLE_KEY)
+  return parseDockOverlayStyle(stored) ?? DEFAULT_DOCK_OVERLAY_STYLE
+}
+
+export async function saveDockOverlayStyle(value: DockOverlayStyle): Promise<void> {
+  await store.set(DOCK_OVERLAY_STYLE_KEY, value)
   await store.save()
 }
 
@@ -546,4 +595,68 @@ export async function loadMenuBarWidgetToneModes(): Promise<MenuBarWidgetToneMod
 export async function saveMenuBarWidgetToneModes(value: MenuBarWidgetToneModes): Promise<void> {
   await store.set(MENU_BAR_WIDGET_TONE_MODES_KEY, value)
   await store.save()
+}
+
+/** Colors a surface (Dock / Menu Bar) can override: tone colors, tone modes and text colors. Pace thresholds stay global. */
+export type SurfaceColorsOverride = {
+  colors: MenuBarWidgetColors
+  textColors: MenuBarWidgetTextColors
+  toneModes: MenuBarWidgetToneModes
+}
+export type SurfaceProvidersOverride = { providerIds: WidgetProviderIds; providerMetrics: WidgetProviderMetrics }
+/** Per surface: `null` = use the global value. */
+export type SurfaceOverrides = { colors: SurfaceColorsOverride | null; providers: SurfaceProvidersOverride | null }
+export type WidgetSurface = "menuBar" | "dock"
+
+export const DEFAULT_SURFACE_OVERRIDES: SurfaceOverrides = { colors: null, providers: null }
+
+export function surfaceOverridesKey(surface: WidgetSurface): string {
+  return surface === "dock" ? "dockOverrides" : "menuBarOverrides"
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+/** Each part is kept when it is an object; an invalid or missing part becomes null (= use the global value). */
+export function parseSurfaceOverrides(value: unknown): SurfaceOverrides {
+  const source = asRecord(value)
+  if (!source) return DEFAULT_SURFACE_OVERRIDES
+  const colorsSource = asRecord(source.colors)
+  const providersSource = asRecord(source.providers)
+  return {
+    colors: colorsSource
+      ? {
+          colors: parseMenuBarWidgetColors(colorsSource.colors),
+          textColors: parseMenuBarWidgetTextColors(colorsSource.textColors),
+          toneModes: parseMenuBarWidgetToneModes(colorsSource.toneModes),
+        }
+      : null,
+    providers:
+      providersSource && isWidgetProviderIds(providersSource.providerIds)
+        ? {
+            providerIds: providersSource.providerIds,
+            providerMetrics: parseWidgetProviderMetrics(providersSource.providerMetrics),
+          }
+        : null,
+  }
+}
+
+export async function loadSurfaceOverrides(surface: WidgetSurface): Promise<SurfaceOverrides> {
+  return parseSurfaceOverrides(await store.get<unknown>(surfaceOverridesKey(surface)))
+}
+
+export async function saveSurfaceOverrides(surface: WidgetSurface, value: SurfaceOverrides): Promise<void> {
+  await store.set(surfaceOverridesKey(surface), value)
+  await store.save()
+}
+
+/** The surface's own colors when it overrides them, else the global ones. */
+export function effectiveColors(global: SurfaceColorsOverride, override: SurfaceOverrides): SurfaceColorsOverride {
+  return override.colors ?? global
+}
+
+/** The surface's own providers when it overrides them, else the global ones. */
+export function effectiveProviders(global: SurfaceProvidersOverride, override: SurfaceOverrides): SurfaceProvidersOverride {
+  return override.providers ?? global
 }

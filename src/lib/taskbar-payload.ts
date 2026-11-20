@@ -6,6 +6,9 @@ export type TaskbarItem = {
   label: string
   value: string
   tone: "ahead" | "on-track" | "behind" | "neutral"
+  /** Used 0..1 fraction (the Dock overlay draws it); null when the item has none. */
+  fraction?: number | null
+  expectedFraction?: number | null
 }
 
 export type TaskbarProvider = {
@@ -29,6 +32,9 @@ export type TaskbarBackdrop = {
 /** Windows: raw widget pixels (straight, non-premultiplied RGBA, base64) drawn natively on the taskbar. */
 export type WidgetRgbaImage = { width: number; height: number; rgba: string }
 
+/** macOS: pre-rendered Dock overlay (140x140 unit canvas, see dock-overlay-image.ts) for the apps with these bundle ids. */
+export type DockOverlay = { bundleIds: string[]; png: string }
+
 export type TaskbarPayload = {
   providers: TaskbarProvider[]
   tooltip: string
@@ -38,29 +44,35 @@ export type TaskbarPayload = {
   menuBarBackdrop?: TaskbarBackdrop | null
   /** Windows: the pre-rendered widget (rendered at MENU_BAR_RENDER_SCALE); null falls back to the native text layout. */
   widgetImage?: WidgetRgbaImage | null
+  /** macOS: one overlay per provider app in the Dock; empty (or null) removes them all. */
+  dockOverlays?: DockOverlay[] | null
 }
 
 type TaskbarProviderDraft = Omit<TaskbarProvider, "iconMask"> & { iconUrl: string }
 
 function buildItems(row: WidgetRow): TaskbarItem[] {
   if (typeof row.limitedUntilMs === "number") {
-    return [{ label: "", value: formatAvailableAt(row.limitedUntilMs), tone: "neutral" }]
+    return [{ label: "", value: formatAvailableAt(row.limitedUntilMs), tone: "neutral", fraction: null, expectedFraction: null }]
   }
   if (row.metrics?.length) {
     return row.metrics.map((metric) => ({
       label: metric.label,
       value: formatUsageText(metric.fraction, metric.expectedFraction),
       tone: metric.tone,
+      fraction: metric.fraction,
+      expectedFraction: metric.expectedFraction ?? null,
     }))
   }
   if (row.fraction === null) {
-    return [{ label: "", value: "—", tone: "neutral" }]
+    return [{ label: "", value: "—", tone: "neutral", fraction: null, expectedFraction: null }]
   }
   return [
     {
       label: "",
       value: formatUsageText(row.fraction, row.expectedFraction),
       tone: row.tone,
+      fraction: row.fraction,
+      expectedFraction: row.expectedFraction ?? null,
     },
   ]
 }

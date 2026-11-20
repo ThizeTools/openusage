@@ -10,12 +10,20 @@ import {
   DEFAULT_RESET_TIMER_DISPLAY_MODE,
   DEFAULT_START_ON_LOGIN,
   DEFAULT_THEME_MODE,
+  DEFAULT_PACE_THRESHOLDS,
   DEFAULT_WIDGET_PROVIDER_IDS,
   DEFAULT_WIDGET_PROVIDER_METRICS,
   DEFAULT_WIDGET_VISIBLE,
   arePluginSettingsEqual,
   getEnabledPluginIds,
   loadMenuBarWidgetBackdrop,
+  loadDockOverlayStyle,
+  loadPaceThresholds,
+  parsePaceThresholds,
+  savePaceThresholds,
+  saveDockOverlayStyle,
+  parseDockOverlayStyle,
+  DEFAULT_DOCK_OVERLAY_STYLE,
   loadMenuBarWidgetColors,
   loadMenuBarWidgetTextColors,
   loadMenuBarWidgetToneModes,
@@ -48,6 +56,13 @@ import {
   saveWidgetProviderIds,
   saveWidgetProviderMetrics,
   saveWidgetVisible,
+  DEFAULT_SURFACE_OVERRIDES,
+  effectiveColors,
+  effectiveProviders,
+  loadSurfaceOverrides,
+  parseSurfaceOverrides,
+  saveSurfaceOverrides,
+  surfaceOverridesKey,
 } from "@/lib/settings"
 import type { PluginMeta } from "@/lib/plugin-types"
 
@@ -514,6 +529,67 @@ describe("settings", () => {
     await expect(loadMenuBarWidgetStyle()).resolves.toBe(DEFAULT_MENU_BAR_WIDGET_STYLE)
   })
 
+  it("loads the default dock overlay style when missing", async () => {
+    await expect(loadDockOverlayStyle()).resolves.toBe("pill")
+    expect(DEFAULT_DOCK_OVERLAY_STYLE).toBe("pill")
+  })
+
+  it("loads and saves the dock overlay style", async () => {
+    for (const style of ["off", "pill"] as const) {
+      await saveDockOverlayStyle(style)
+      expect(storeState.get("dockOverlayStyle")).toBe(style)
+      await expect(loadDockOverlayStyle()).resolves.toBe(style)
+    }
+  })
+
+  it("falls back to default for an invalid dock overlay style", async () => {
+    storeState.set("dockOverlayStyle", "glow")
+    await expect(loadDockOverlayStyle()).resolves.toBe("pill")
+    expect(parseDockOverlayStyle(3)).toBeNull()
+    expect(parseDockOverlayStyle("glow")).toBeNull()
+    expect(parseDockOverlayStyle("off")).toBe("off")
+    expect(parseDockOverlayStyle("pill")).toBe("pill")
+  })
+
+  it("migrates the removed ring, bars and badge dock overlay styles to pill", async () => {
+    for (const old of ["ring", "bars", "badge"]) {
+      storeState.set("dockOverlayStyle", old)
+      await expect(loadDockOverlayStyle()).resolves.toBe("pill")
+      expect(parseDockOverlayStyle(old)).toBe("pill")
+    }
+  })
+
+  it("loads the default pace thresholds when missing or invalid", async () => {
+    expect(DEFAULT_PACE_THRESHOLDS).toEqual({ healthy: 80, closeToLimit: 100 })
+    await expect(loadPaceThresholds()).resolves.toEqual(DEFAULT_PACE_THRESHOLDS)
+    storeState.set("paceThresholds", { healthy: 90, closeToLimit: 80 })
+    await expect(loadPaceThresholds()).resolves.toEqual(DEFAULT_PACE_THRESHOLDS)
+  })
+
+  it("loads and saves pace thresholds", async () => {
+    await savePaceThresholds({ healthy: 60, closeToLimit: 120 })
+    expect(storeState.get("paceThresholds")).toEqual({ healthy: 60, closeToLimit: 120 })
+    expect(storeSaveMock).toHaveBeenCalled()
+    await expect(loadPaceThresholds()).resolves.toEqual({ healthy: 60, closeToLimit: 120 })
+  })
+
+  it("parses pace thresholds: rounds, enforces 5 <= healthy < closeToLimit <= 150", () => {
+    expect(parsePaceThresholds({ healthy: 79.6, closeToLimit: 100.2 })).toEqual({ healthy: 80, closeToLimit: 100 })
+    expect(parsePaceThresholds({ healthy: 5, closeToLimit: 150 })).toEqual({ healthy: 5, closeToLimit: 150 })
+    for (const bad of [
+      null,
+      "x",
+      {},
+      { healthy: 4, closeToLimit: 100 },
+      { healthy: 80, closeToLimit: 151 },
+      { healthy: 100, closeToLimit: 100 },
+      { healthy: "80", closeToLimit: 100 },
+      { healthy: Number.NaN, closeToLimit: 100 },
+    ]) {
+      expect(parsePaceThresholds(bad)).toBeNull()
+    }
+  })
+
   it("loads the default menu bar widget colors when missing", async () => {
     await expect(loadMenuBarWidgetColors()).resolves.toEqual(DEFAULT_MENU_BAR_WIDGET_COLORS)
     expect(DEFAULT_MENU_BAR_WIDGET_COLORS).toEqual({})
@@ -640,5 +716,62 @@ describe("settings", () => {
   it("falls back to default when the stored widget provider metrics are not an object", async () => {
     storeState.set("widgetProviderMetrics", ["Session"])
     await expect(loadWidgetProviderMetrics()).resolves.toEqual(DEFAULT_WIDGET_PROVIDER_METRICS)
+  })
+})
+
+describe("surface overrides", () => {
+  beforeEach(() => storeState.clear())
+  const global = {
+    colors: { ahead: "#111111" },
+    textColors: { label: "mono", used: "color", expected: "mono" },
+    toneModes: { ahead: "mono", onTrack: "color", behind: "color" },
+  } as const
+  const globalProviders = { providerIds: ["claude"], providerMetrics: { claude: ["Session"] } }
+
+  it("uses separate store keys per surface", () => {
+    expect(surfaceOverridesKey("menuBar")).toBe("menuBarOverrides")
+    expect(surfaceOverridesKey("dock")).toBe("dockOverrides")
+  })
+
+  it("parses missing or invalid values to no overrides", () => {
+    expect(parseSurfaceOverrides(undefined)).toEqual(DEFAULT_SURFACE_OVERRIDES)
+    expect(parseSurfaceOverrides("x")).toEqual(DEFAULT_SURFACE_OVERRIDES)
+    expect(parseSurfaceOverrides({ colors: "x", providers: { providerIds: [1] } })).toEqual(DEFAULT_SURFACE_OVERRIDES)
+  })
+
+  it("parses each part with the existing parsers", () => {
+    const parsed = parseSurfaceOverrides({
+      colors: { colors: { ahead: "#ABCDEF", behind: "red" }, textColors: { label: "color", used: "x" }, toneModes: {} },
+      providers: { providerIds: null, providerMetrics: { claude: ["Session"], codex: "Weekly" } },
+    })
+    expect(parsed.colors).toEqual({
+      colors: { ahead: "#abcdef" },
+      textColors: { ...DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS, label: "color" },
+      toneModes: DEFAULT_MENU_BAR_WIDGET_TONE_MODES,
+    })
+    expect(parsed.providers).toEqual({ providerIds: null, providerMetrics: { claude: ["Session"] } })
+  })
+
+  it("keeps one part when the other is invalid", () => {
+    const parsed = parseSurfaceOverrides({ colors: null, providers: { providerIds: ["a"], providerMetrics: {} } })
+    expect(parsed.colors).toBeNull()
+    expect(parsed.providers).toEqual({ providerIds: ["a"], providerMetrics: {} })
+  })
+
+  it("saves and loads per surface", async () => {
+    const value = { colors: { ...global }, providers: null }
+    await saveSurfaceOverrides("dock", value)
+    expect(storeState.get("dockOverrides")).toEqual(value)
+    await expect(loadSurfaceOverrides("dock")).resolves.toEqual(value)
+    await expect(loadSurfaceOverrides("menuBar")).resolves.toEqual(DEFAULT_SURFACE_OVERRIDES)
+  })
+
+  it("effectiveColors / effectiveProviders prefer the override and fall back to the global value", () => {
+    const own = { ...global, colors: { behind: "#222222" } }
+    expect(effectiveColors(global, DEFAULT_SURFACE_OVERRIDES)).toBe(global)
+    expect(effectiveColors(global, { colors: own, providers: null })).toBe(own)
+    const ownProviders = { providerIds: ["codex"], providerMetrics: {} }
+    expect(effectiveProviders(globalProviders, DEFAULT_SURFACE_OVERRIDES)).toBe(globalProviders)
+    expect(effectiveProviders(globalProviders, { colors: null, providers: ownProviders })).toBe(ownProviders)
   })
 })

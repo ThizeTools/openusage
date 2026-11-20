@@ -495,6 +495,7 @@ mod tests {
             menu_bar_image: None,
             menu_bar_backdrop: None,
             widget_image: None,
+            dock_overlays: None,
             providers: vec![
                 TaskbarProvider {
                     brand_color: Some("#DE7356".into()),

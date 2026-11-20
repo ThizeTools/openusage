@@ -138,7 +138,7 @@ describe("stacked style", () => {
     const [label1, value1, label2, value2] = texts(p)
 
     // Rows span 1.5..20.5: row midpoints 6.25 and 15.75, baseline = mid + 0.35 * value size.
-    expect(S.stacked).toMatchObject({ fontSize: 9.5, labelSize: 9, rowHeight: 9.5 })
+    expect(S.stacked).toMatchObject({ fontSize: 9.5, labelSize: 9.5 * 0.82, rowHeight: 9.5 })
     expect(label1.baseline).toBeCloseTo(base(6.25, 9.5))
     expect(value1.baseline).toBeCloseTo(base(6.25, 9.5))
     expect(label2.baseline).toBeCloseTo(base(15.75, 9.5))
@@ -157,7 +157,7 @@ describe("stacked style", () => {
       { style: "stacked" }
     )!.providers
     const [label, value] = texts(p)
-    expect(label).toMatchObject({ size: 9, weight: 500, alpha: 0.62, tone: undefined })
+    expect(label).toMatchObject({ size: 9.5 * 0.82, weight: 500, alpha: 0.62, tone: undefined })
     expect(value).toMatchObject({ size: 9.5, weight: 700, tone: "behind", alpha: 1 })
   })
 
@@ -217,7 +217,7 @@ describe("compact style", () => {
     const [p] = layoutMenuBarWidget(payload([provider(TWO)]), measure, { style: "compact" })!.providers
     const [label1, value1, label2, value2] = texts(p)
     expect([label1.text, label2.text]).toEqual(["S", "W"])
-    expect(label1).toMatchObject({ alpha: 0.62, weight: 500, size: 9 })
+    expect(label1).toMatchObject({ alpha: 0.62, weight: 500, size: 9.5 * 0.82 })
     expect(value1).toMatchObject({ size: 9.5, weight: 700 })
     expect(value1.x).toBe(iconEnd("compact") + 4 + S.compact.labelGap)
     expect(value1.baseline).toBeCloseTo(base(6.25, 9.5))
@@ -240,7 +240,7 @@ describe("inline style", () => {
     const p = layout.providers[0]
     const t = texts(p)
     expect(t.map((s) => s.text)).toEqual(["Session", "42", "·", "Weekly", "9"])
-    expect(t.every((s) => s.size === 12.5 && Math.abs(s.baseline - base(11, 12.5)) < 1e-9)).toBe(true)
+    expect(t.every((s) => s.size === (s.part === "label" ? 12.5 * 0.82 : 12.5) && Math.abs(s.baseline - base(11, 12.5)) < 1e-9)).toBe(true)
 
     const [label1, value1, sep, label2, value2] = t
     expect(label1.x).toBe(inlineEnd)
@@ -270,7 +270,7 @@ describe("inline-compact style", () => {
 
     const end = iconEnd("inline-compact")
     const [label1, value1, sep, label2, value2] = t
-    expect(label1).toMatchObject({ x: end, size: 12, weight: 500, alpha: 0.62 })
+    expect(label1).toMatchObject({ x: end, size: 12.5 * 0.82, weight: 500, alpha: 0.62 })
     expect(value1).toMatchObject({ x: end + 4 + 3, size: 12.5, weight: 700 })
     expect(S["inline-compact"]).toMatchObject({ labelGap: 3, sepGap: 4, provGap: 12 })
     expect(sep.x).toBe(value1.x + 8 + 4)
