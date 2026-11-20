@@ -1,0 +1,6 @@
+# macOS: sign the dev binary with a stable identity before running it (see scripts/dev-sign-run.sh).
+[target.aarch64-apple-darwin]
+runner = "../scripts/dev-sign-run.sh"
+
+[target.x86_64-apple-darwin]
+runner = "../scripts/dev-sign-run.sh"
