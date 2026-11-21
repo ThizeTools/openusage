@@ -18,6 +18,20 @@ use tauri_plugin_opener::OpenerExt;
 
 pub use store::{init, Account};
 
+/// Claude account id (`account.uuid` from the OAuth token response) of an OpenUsage Claude account.
+pub(crate) fn claude_account_uuid(account_id: &str) -> Result<String, String> {
+    let account = store::find(account_id).ok_or("Account not found")?;
+    if account.provider != "claude" {
+        return Err("Not a Claude account".into());
+    }
+    let secret = store::read_secret(&account.id)?;
+    serde_json::from_str::<serde_json::Value>(&secret)
+        .ok()
+        .and_then(|json| json.pointer("/account/uuid")?.as_str().map(str::to_string))
+        .filter(|uuid| !uuid.is_empty())
+        .ok_or_else(|| "Sign in to this account again".to_string())
+}
+
 static LOGINS: Mutex<Option<HashMap<String, Arc<AtomicBool>>>> = Mutex::new(None);
 
 fn auth_spec(plugin: &LoadedPlugin) -> Option<Result<AuthSpec, String>> {

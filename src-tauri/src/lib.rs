@@ -12,6 +12,7 @@ mod tray;
 #[cfg(target_os = "macos")]
 mod webkit_config;
 mod accounts;
+mod claude_desktop;
 mod taskbar;
 mod widget;
 
@@ -640,6 +641,7 @@ pub fn run() {
             accounts::add_api_key_account,
             accounts::remove_account,
             accounts::rename_account,
+            claude_desktop::open_claude_desktop,
             open_devtools,
             open_settings_window,
             start_probe_batch,
