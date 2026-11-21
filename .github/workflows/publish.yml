@@ -134,7 +134,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSETS=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr -d '\r')
-
-          printf '%s\n' "$ASSETS" | grep -Fxq 'latest.json' || { echo "Missing updater manifest: latest.json"; exit 1; }
-          printf '%s\n' "$ASSETS" | grep -Eq '\.sig$' || { echo "Missing updater signatures (.sig)"; exit 1; }
+          # The parallel jobs re-upload latest.json (delete + upload) while merging their platforms,
+          # so it can be missing for a moment: retry before failing.
+          for attempt in 1 2 3 4 5 6; do
+            ASSETS=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr -d '\r' || true)
+            if printf '%s\n' "$ASSETS" | grep -Fxq 'latest.json' && printf '%s\n' "$ASSETS" | grep -Eq '\.sig$'; then
+              exit 0
+            fi
+            echo "Updater assets not complete yet (attempt $attempt of 6), retrying in 15s"
+            sleep 15
+          done
+          printf '%s\n' "$ASSETS" | grep -Fxq 'latest.json' || echo "Missing updater manifest: latest.json"
+          printf '%s\n' "$ASSETS" | grep -Eq '\.sig$' || echo "Missing updater signatures (.sig)"
+          exit 1
