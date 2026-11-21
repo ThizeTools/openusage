@@ -7,6 +7,7 @@ import type { Account } from "@/lib/accounts"
 const state = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   windows: true,
+  mac: false,
 }))
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -16,6 +17,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@/lib/platform", () => ({
   isWindowsPlatform: () => state.windows,
+  isMacPlatform: () => state.mac,
 }))
 
 const claudeAccount: Account = {
@@ -31,6 +33,7 @@ const OPEN_BUTTON = "Open me@work.test in Claude Desktop"
 describe("AccountRow Claude Desktop button", () => {
   beforeEach(() => {
     state.windows = true
+    state.mac = false
     state.invokeMock.mockReset().mockResolvedValue(undefined)
   })
 
@@ -53,9 +56,17 @@ describe("AccountRow Claude Desktop button", () => {
     expect(screen.queryByRole("button", { name: /in Claude Desktop/ })).toBeNull()
   })
 
-  it("has no Claude Desktop button outside Windows", () => {
+  it("has no Claude Desktop button outside Windows and macOS", () => {
     state.windows = false
     render(<AccountRow account={claudeAccount} />)
     expect(screen.queryByRole("button", { name: /in Claude Desktop/ })).toBeNull()
+  })
+
+  it("opens the Claude account in Claude Desktop on macOS", async () => {
+    state.windows = false
+    state.mac = true
+    render(<AccountRow account={claudeAccount} />)
+    await userEvent.click(screen.getByRole("button", { name: OPEN_BUTTON }))
+    expect(state.invokeMock).toHaveBeenCalledWith("open_claude_desktop", { accountId: "1a2b3c4d" })
   })
 })

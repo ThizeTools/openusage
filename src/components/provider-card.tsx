@@ -1,5 +1,5 @@
 import { Fragment, useMemo } from "react"
-import { AlertCircle, Clock, ExternalLink, RefreshCw } from "lucide-react"
+import { AlertCircle, AppWindow, Clock, ExternalLink, RefreshCw } from "lucide-react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -34,6 +34,8 @@ interface ProviderCardProps {
   scopeFilter?: "overview" | "all"
   resetTimerDisplayMode?: ResetTimerDisplayMode
   onResetTimerDisplayModeToggle?: () => void
+  /** Claude account instances (Windows, macOS): opens that account's Claude Desktop window. */
+  onOpenClaudeDesktop?: () => void
 }
 
 /** Same amber the plugins use for their own rate-limit badge. */
@@ -125,6 +127,7 @@ export function ProviderCard({
   scopeFilter = "all",
   resetTimerDisplayMode = "relative",
   onResetTimerDisplayModeToggle,
+  onOpenClaudeDesktop,
 }: ProviderCardProps) {
   // Filter lines based on scope - match by label since runtime lines can differ from manifest
   const overviewLabels = new Set(
@@ -226,7 +229,7 @@ export function ProviderCard({
             </Badge>
           )}
         </div>
-        {visibleLinks.length > 0 && (
+        {(visibleLinks.length > 0 || onOpenClaudeDesktop) && (
           <div className="mb-2 -mt-0.5 flex flex-wrap gap-1.5">
             {visibleLinks.map((link) => (
               <Button
@@ -242,6 +245,17 @@ export function ProviderCard({
                 <ExternalLink className="size-3 opacity-70" />
               </Button>
             ))}
+            {onOpenClaudeDesktop && (
+              <Button
+                variant="outline"
+                size="xs"
+                className="h-6 max-w-full text-[11px]"
+                onClick={onOpenClaudeDesktop}
+              >
+                <span className="truncate">Claude Desktop</span>
+                <AppWindow className="size-3 opacity-70" />
+              </Button>
+            )}
           </div>
         )}
         {error && !hasStaleData && <PluginError message={error} />}

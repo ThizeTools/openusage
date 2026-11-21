@@ -1,13 +1,16 @@
-//! Claude Desktop (Windows): open the app signed in as a given OpenUsage Claude account,
-//! side by side with other accounts. The app's default data folder holds the main sign-in;
-//! each extra account runs from its own folder under `~/Claude-Contas` (`--user-data-dir`).
-//! Claude Desktop records the signed-in account in each folder's `config.json`
+//! Claude Desktop (Windows and macOS): open the app signed in as a given OpenUsage Claude
+//! account, side by side with other accounts. The app's default data folder holds the main
+//! sign-in; each extra account runs from its own folder under `Claude-Contas`
+//! (`--user-data-dir`): `~/Claude-Contas` on Windows, `~/Library/Application Support/Claude-Contas`
+//! on macOS. Claude Desktop records the signed-in account in each folder's `config.json`
 //! (`lastKnownAccountUuid`), which is how a folder is matched to an account.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-/// Folder in the user's home holding one data folder per extra account.
+/// Folder holding one data folder per extra account.
 const PROFILES_DIR: &str = "Claude-Contas";
+const IS_MAC: bool = cfg!(target_os = "macos");
 
 #[derive(Debug, PartialEq)]
 enum Target {
@@ -25,8 +28,19 @@ fn signed_in_uuid(dir: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The app's default data folder (MSIX install): `%LOCALAPPDATA%\Claude-Data\claude_<package id>`.
+/// Windows: outside AppData, which the Store (MSIX) app would redirect into its own package.
+fn profiles_root() -> Result<PathBuf, String> {
+    let base = if IS_MAC { dirs::data_dir() } else { dirs::home_dir() };
+    base.map(|dir| dir.join(PROFILES_DIR))
+        .ok_or_else(|| "Cannot find the home folder".to_string())
+}
+
+/// The app's default data folder. macOS: `~/Library/Application Support/Claude`.
+/// Windows (MSIX install): `%LOCALAPPDATA%\Claude-Data\claude_<package id>`.
 fn main_dir() -> Option<PathBuf> {
+    if IS_MAC {
+        return dirs::data_dir().map(|dir| dir.join("Claude"));
+    }
     let root = dirs::data_local_dir()?.join("Claude-Data");
     std::fs::read_dir(root)
         .ok()?
@@ -83,7 +97,7 @@ fn pick(
     Target::Folder(new_dir)
 }
 
-/// The app's execution alias; it stays valid across Claude Desktop updates.
+/// The Windows app's execution alias; it stays valid across Claude Desktop updates.
 fn app_path() -> Result<PathBuf, String> {
     let path = dirs::data_local_dir()
         .map(|dir| dir.join("Microsoft").join("WindowsApps").join("claude-desktop.exe"))
@@ -95,18 +109,39 @@ fn app_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-#[tauri::command]
-pub fn open_claude_desktop(account_id: String) -> Result<(), String> {
-    let uuid = crate::accounts::claude_account_uuid(&account_id)?;
-    let app = app_path()?;
-    let root = dirs::home_dir().ok_or("Cannot find the home folder")?.join(PROFILES_DIR);
-    let main_uuid = main_dir().and_then(|dir| signed_in_uuid(&dir));
-    let target = pick(&uuid, main_uuid.as_deref(), &extra_dirs(&root), root.join(&account_id));
-    let mut command = std::process::Command::new(app);
-    if let Target::Folder(dir) = target {
-        std::fs::create_dir_all(&dir)
-            .map_err(|error| format!("Cannot create {}: {error}", dir.display()))?;
-        command.arg(format!("--user-data-dir={}", dir.display()));
+/// macOS: `open -n` starts a new process each time; Claude hands off to the window already
+/// using that data folder. Windows: the execution alias.
+fn launcher() -> Result<Command, String> {
+    if IS_MAC {
+        let mut command = Command::new("/usr/bin/open");
+        command.args(["-n", "-a", "Claude"]);
+        return Ok(command);
+    }
+    Ok(Command::new(app_path()?))
+}
+
+fn data_dir_args(dir: &Path, mac: bool) -> Vec<String> {
+    let flag = format!("--user-data-dir={}", dir.display());
+    if mac {
+        vec!["--args".to_string(), flag]
+    } else {
+        vec![flag]
+    }
+}
+
+/// macOS `open` reports a missing app in its exit status; the Windows alias is checked up front.
+fn run(mut command: Command) -> Result<(), String> {
+    if IS_MAC {
+        let output = command
+            .output()
+            .map_err(|error| format!("Cannot open Claude Desktop: {error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        return Err(format!(
+            "Cannot open Claude Desktop: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     command
         .spawn()
@@ -114,10 +149,25 @@ pub fn open_claude_desktop(account_id: String) -> Result<(), String> {
         .map_err(|error| format!("Cannot open Claude Desktop: {error}"))
 }
 
+#[tauri::command]
+pub fn open_claude_desktop(account_id: String) -> Result<(), String> {
+    let uuid = crate::accounts::claude_account_uuid(&account_id)?;
+    let mut command = launcher()?;
+    let root = profiles_root()?;
+    let main_uuid = main_dir().and_then(|dir| signed_in_uuid(&dir));
+    let target = pick(&uuid, main_uuid.as_deref(), &extra_dirs(&root), root.join(&account_id));
+    if let Target::Folder(dir) = &target {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("Cannot create {}: {error}", dir.display()))?;
+        command.args(data_dir_args(dir, IS_MAC));
+    }
+    run(command)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extra_dirs, pick, signed_in_uuid, Target};
-    use std::path::PathBuf;
+    use super::{data_dir_args, extra_dirs, pick, signed_in_uuid, Target};
+    use std::path::{Path, PathBuf};
 
     fn temp_root() -> PathBuf {
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -156,6 +206,14 @@ mod tests {
     fn else_a_new_folder() {
         let found = pick("b", Some("a"), &extras(&[("x", Some("c"))]), "new".into());
         assert_eq!(found, Target::Folder("new".into()));
+    }
+
+    #[test]
+    fn data_dir_args_per_platform() {
+        let dir = Path::new("/data/Work");
+        let flag = format!("--user-data-dir={}", dir.display());
+        assert_eq!(data_dir_args(dir, false), vec![flag.clone()]);
+        assert_eq!(data_dir_args(dir, true), vec!["--args".to_string(), flag]);
     }
 
     #[test]
