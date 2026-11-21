@@ -343,4 +343,37 @@ describe("useAppUpdate", () => {
 
     await act(async () => { resolveInstall?.() })
   })
+
+  it("passes a timeout so a hung check cannot block later checks", async () => {
+    checkMock.mockResolvedValue(null)
+    renderHook(() => useAppUpdate())
+    await act(() => Promise.resolve())
+    expect(checkMock).toHaveBeenCalledWith({ timeout: 30_000 })
+  })
+
+  it("re-checks when the panel is shown and the last check is older than 5 minutes", async () => {
+    vi.useFakeTimers()
+    try {
+      checkMock.mockResolvedValue(null)
+      renderHook(() => useAppUpdate())
+      await act(() => Promise.resolve())
+      expect(checkMock).toHaveBeenCalledTimes(1)
+
+      act(() => {
+        window.dispatchEvent(new Event("focus"))
+      })
+      expect(checkMock).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1000)
+      })
+      act(() => {
+        window.dispatchEvent(new Event("focus"))
+      })
+      await act(() => Promise.resolve())
+      expect(checkMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

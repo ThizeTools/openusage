@@ -3,6 +3,15 @@ import { isTauri } from "@tauri-apps/api/core"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import { relaunch } from "@tauri-apps/plugin-process"
 
+/** Background re-check interval. */
+const CHECK_INTERVAL_MS = 15 * 60 * 1000
+/** Showing the panel re-checks when the last check is older than this. */
+const RECHECK_ON_SHOW_MS = 5 * 60 * 1000
+/** A hung request (e.g. after the computer slept) must not block every later check. */
+const CHECK_TIMEOUT_MS = 30 * 1000
+/** Whole update download, generous for slow connections. */
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
+
 export type UpdateStatus =
   | { status: "idle" }
   | { status: "checking" }
@@ -25,6 +34,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   const mountedRef = useRef(true)
   const inFlightRef = useRef({ checking: false, downloading: false, installing: false })
   const upToDateTimeoutRef = useRef<number | null>(null)
+  const lastCheckAtRef = useRef(0)
 
   const setStatus = useCallback((next: UpdateStatus) => {
     statusRef.current = next
@@ -43,9 +53,10 @@ export function useAppUpdate(): UseAppUpdateReturn {
       upToDateTimeoutRef.current = null
     }
     inFlightRef.current.checking = true
+    lastCheckAtRef.current = Date.now()
     setStatus({ status: "checking" })
     try {
-      const update = await check()
+      const update = await check({ timeout: CHECK_TIMEOUT_MS })
       inFlightRef.current.checking = false
       if (!mountedRef.current) return
       if (!update) {
@@ -83,7 +94,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
             } else if (event.event === "Finished") {
               setStatus({ status: "ready" })
             }
-          })
+          }, { timeout: DOWNLOAD_TIMEOUT_MS })
           setStatus({ status: "ready" })
         } catch (err) {
           console.error("Update download failed:", err)
@@ -104,10 +115,9 @@ export function useAppUpdate(): UseAppUpdateReturn {
     mountedRef.current = true
     void checkForUpdates()
 
-    // Check every 15 minutes
     const intervalId = setInterval(() => {
       void checkForUpdates()
-    }, 15 * 60 * 1000)
+    }, CHECK_INTERVAL_MS)
 
     return () => {
       mountedRef.current = false
@@ -115,6 +125,21 @@ export function useAppUpdate(): UseAppUpdateReturn {
       if (upToDateTimeoutRef.current !== null) {
         clearTimeout(upToDateTimeoutRef.current)
       }
+    }
+  }, [checkForUpdates])
+
+  // A hidden panel can have its timers throttled (macOS), so also check when it is shown.
+  useEffect(() => {
+    const recheckIfStale = () => {
+      if (document.visibilityState === "hidden") return
+      if (Date.now() - lastCheckAtRef.current < RECHECK_ON_SHOW_MS) return
+      void checkForUpdates()
+    }
+    window.addEventListener("focus", recheckIfStale)
+    document.addEventListener("visibilitychange", recheckIfStale)
+    return () => {
+      window.removeEventListener("focus", recheckIfStale)
+      document.removeEventListener("visibilitychange", recheckIfStale)
     }
   }, [checkForUpdates])
 
