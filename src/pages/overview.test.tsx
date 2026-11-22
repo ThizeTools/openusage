@@ -1,11 +1,28 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { OverviewPage } from "@/pages/overview"
 import { openSettingsTab } from "@/lib/settings-window"
 
+const state = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  windows: true,
+  mac: false,
+}))
+
 vi.mock("@/lib/settings-window", () => ({
   openSettingsTab: vi.fn(() => Promise.resolve()),
+}))
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: state.invokeMock,
+  isTauri: () => true,
+}))
+
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isWindowsPlatform: () => state.windows,
+  isMacPlatform: () => state.mac,
 }))
 
 describe("OverviewPage", () => {
@@ -95,5 +112,56 @@ describe("OverviewPage", () => {
 
     render(<OverviewPage plugins={plugins} displayMode="used" resetTimerDisplayMode="relative" />)
     expect(screen.queryByRole("button", { name: /status/i })).toBeNull()
+  })
+})
+
+function accountPlugin(id: string) {
+  return {
+    meta: { id, name: `Account ${id}`, iconUrl: "", lines: [], primaryCandidates: [] },
+    data: null,
+    loading: false,
+    error: null,
+    lastManualRefreshAt: null,
+    lastUpdatedAt: null,
+  }
+}
+
+describe("OverviewPage Claude Desktop button", () => {
+  beforeEach(() => {
+    state.windows = true
+    state.mac = false
+    state.invokeMock.mockReset().mockResolvedValue(undefined)
+  })
+
+  it("opens a Claude account in Claude Desktop", async () => {
+    render(<OverviewPage plugins={[accountPlugin("claude@abc")]} resetTimerDisplayMode="relative" />)
+    await userEvent.click(screen.getByRole("button", { name: /Claude Desktop/ }))
+    expect(state.invokeMock).toHaveBeenCalledWith("open_claude_desktop", { accountId: "abc" })
+  })
+
+  it("shows the error when Claude Desktop cannot open", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    state.invokeMock.mockRejectedValue("Claude Desktop is not installed")
+    render(<OverviewPage plugins={[accountPlugin("claude@abc")]} resetTimerDisplayMode="relative" />)
+    await userEvent.click(screen.getByRole("button", { name: /Claude Desktop/ }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude Desktop is not installed")
+  })
+
+  it("has no Claude Desktop button for other providers", () => {
+    render(<OverviewPage plugins={[accountPlugin("codex")]} resetTimerDisplayMode="relative" />)
+    expect(screen.queryByRole("button", { name: /Claude Desktop/ })).toBeNull()
+  })
+
+  it("opens the matching account when there are several Claude accounts", async () => {
+    render(
+      <OverviewPage
+        plugins={[accountPlugin("claude@abc"), accountPlugin("claude@def")]}
+        resetTimerDisplayMode="relative"
+      />
+    )
+    const buttons = screen.getAllByRole("button", { name: /Claude Desktop/ })
+    expect(buttons).toHaveLength(2)
+    await userEvent.click(buttons[1])
+    expect(state.invokeMock).toHaveBeenCalledWith("open_claude_desktop", { accountId: "def" })
   })
 })

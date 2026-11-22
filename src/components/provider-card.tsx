@@ -36,6 +36,8 @@ interface ProviderCardProps {
   onResetTimerDisplayModeToggle?: () => void
   /** Claude account instances (Windows, macOS): opens that account's Claude Desktop window. */
   onOpenClaudeDesktop?: () => void
+  /** Why the last "Claude Desktop" click failed; shown under the buttons. */
+  claudeDesktopError?: string | null
 }
 
 /** Same amber the plugins use for their own rate-limit badge. */
@@ -128,6 +130,7 @@ export function ProviderCard({
   resetTimerDisplayMode = "relative",
   onResetTimerDisplayModeToggle,
   onOpenClaudeDesktop,
+  claudeDesktopError,
 }: ProviderCardProps) {
   // Filter lines based on scope - match by label since runtime lines can differ from manifest
   const overviewLabels = new Set(
@@ -258,6 +261,7 @@ export function ProviderCard({
             )}
           </div>
         )}
+        {claudeDesktopError ? <p role="alert" className="mb-2 text-xs text-destructive">{claudeDesktopError}</p> : null}
         {error && !hasStaleData && <PluginError message={error} />}
 
         {error && hasStaleData && (

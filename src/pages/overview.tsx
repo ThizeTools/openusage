@@ -1,5 +1,6 @@
 import { ProviderCard } from "@/components/provider-card"
 import { Button } from "@/components/ui/button"
+import { useOpenClaudeDesktop } from "@/hooks/use-open-claude-desktop"
 import type { PluginDisplayState } from "@/lib/plugin-types"
 import { openSettingsTab } from "@/lib/settings-window"
 import type { ResetTimerDisplayMode } from "@/lib/settings"
@@ -23,6 +24,8 @@ export function OverviewPage({
   resetTimerDisplayMode,
   onResetTimerDisplayModeToggle,
   }: OverviewPageProps) {
+  const { handlerFor, errorFor } = useOpenClaudeDesktop()
+
   if (error) {
     return (
       <div className="flex flex-col items-center gap-3 text-center text-muted-foreground py-8">
@@ -78,6 +81,8 @@ export function OverviewPage({
           scopeFilter="overview"
           resetTimerDisplayMode={resetTimerDisplayMode}
           onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}
+          onOpenClaudeDesktop={handlerFor(plugin.meta.id)}
+          claudeDesktopError={errorFor(plugin.meta.id)}
         />
       ))}
     </div>
