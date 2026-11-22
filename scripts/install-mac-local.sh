@@ -1,18 +1,20 @@
 #!/bin/sh
 # Builds OpenUsage.app for this Mac, signs it with a stable local identity and installs it in /Applications.
 #
-# Keychain items are partitioned by the signer's Team ID. Signing with an Apple Development certificate
-# (Team ID 976MRYMX47) keeps "Always Allow" approvals across rebuilds; ad-hoc or self-signed builds have no
-# Team ID, so macOS ties the approval to each build's hash and asks again after every install.
+# The identity is a self-signed certificate made on this Mac (no Apple account; files in ~/.openusage-signing).
+# Its designated requirement pins the certificate, so the Accessibility permission survives rebuilds. The Keychain
+# is only used through Apple's `security` tool (see accounts/store.rs), so a new build never asks for the password.
+# macOS shows an "unverified developer" warning the first time it opens. Not trusted on purpose: codesign does not
+# need it, so the check below skips `-v`.
 # Override with OPENUSAGE_SIGNING_IDENTITY (a certificate name or SHA-1 hash from `security find-identity`).
 set -e
 
-IDENTITY="${OPENUSAGE_SIGNING_IDENTITY:-5E74D8F429D652BD0AFC7B5647D04D63A0112D43}" # Apple Development: Giovani Lobato (CCJ4F5HWH5), team 976MRYMX47
+IDENTITY="${OPENUSAGE_SIGNING_IDENTITY:-A8541F368ACC8F3CB17E6A149C59A03364467871}" # OpenUsage Local Signing (self-signed)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/src-tauri/target/release/bundle/macos/OpenUsage.app"
 DEST="/Applications/OpenUsage.app"
 
-if ! security find-identity -v -p codesigning | grep -q -- "$IDENTITY"; then
+if ! security find-identity -p codesigning | grep -q -- "$IDENTITY"; then
   echo "error: code signing identity \"$IDENTITY\" not found in the keychain" >&2
   exit 1
 fi

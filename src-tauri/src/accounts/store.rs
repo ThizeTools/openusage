@@ -158,9 +158,9 @@ const KEYCHAIN_SERVICE: &str = "com.sunstory.openusage";
 const KEYCHAIN_ACCOUNT: &str = "accounts-master-key";
 #[cfg(target_os = "macos")]
 const NONCE_LEN: usize = 12;
-/// errSecItemNotFound
+/// `security` exits with 44 when the item does not exist (errSecItemNotFound).
 #[cfg(target_os = "macos")]
-const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+const SECURITY_ITEM_NOT_FOUND: i32 = 44;
 
 /// Encrypts `plain` with AES-256-GCM; output is nonce (12 bytes) + ciphertext.
 #[cfg(target_os = "macos")]
@@ -193,36 +193,64 @@ fn open(key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|_| "failed to decrypt account secret (wrong key or corrupted file)".to_string())
 }
 
+/// Decodes the base64 master key printed by `security ... -w` (trailing newline allowed).
+#[cfg(target_os = "macos")]
+fn parse_master_key(stdout: &[u8]) -> Result<[u8; 32], String> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    let decoded = STANDARD
+        .decode(String::from_utf8_lossy(stdout).trim())
+        .map_err(|e| format!("accounts master key in Keychain is invalid: {e}"))?;
+    <[u8; 32]>::try_from(decoded.as_slice())
+        .map_err(|_| "accounts master key in Keychain has the wrong length".to_string())
+}
+
 /// Master key from the Keychain (generated and stored on first use), cached
-/// for the process so the Keychain is hit once.
+/// for the process so the Keychain is hit once. The item is created and read
+/// through Apple's `security` tool so access does not depend on OpenUsage's own
+/// signature: a self-signed or ad-hoc build's Keychain access is tied to its
+/// code hash, which changes every build. An item created by an older build asks
+/// once, then never again.
 #[cfg(target_os = "macos")]
 fn master_key() -> Result<[u8; 32], String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
-    use security_framework::passwords::{get_generic_password, set_generic_password};
+    use std::process::Command;
 
     static KEY: Mutex<Option<[u8; 32]>> = Mutex::new(None);
     let mut cached = KEY.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(key) = *cached {
         return Ok(key);
     }
-    let key = match get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
-        Ok(bytes) => {
-            let decoded = STANDARD
-                .decode(String::from_utf8_lossy(&bytes).trim())
-                .map_err(|e| format!("accounts master key in Keychain is invalid: {e}"))?;
-            <[u8; 32]>::try_from(decoded.as_slice())
-                .map_err(|_| "accounts master key in Keychain has the wrong length".to_string())?
-        }
-        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+    let read = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"])
+        .output()
+        .map_err(|e| format!("failed to read accounts master key from Keychain: {e}"))?;
+    let key = match read.status.code() {
+        Some(0) => parse_master_key(&read.stdout)?,
+        Some(SECURITY_ITEM_NOT_FOUND) => {
             let mut key = [0u8; 32];
             OsRng.fill_bytes(&mut key);
-            set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, STANDARD.encode(key).as_bytes())
+            let store = Command::new("/usr/bin/security")
+                .args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"])
+                .arg(STANDARD.encode(key))
+                .output()
                 .map_err(|e| format!("failed to store accounts master key in Keychain: {e}"))?;
+            if !store.status.success() {
+                return Err(format!(
+                    "failed to store accounts master key in Keychain: {}",
+                    String::from_utf8_lossy(&store.stderr).trim()
+                ));
+            }
             key
         }
-        Err(error) => return Err(format!("failed to read accounts master key from Keychain: {error}")),
+        _ => {
+            return Err(format!(
+                "failed to read accounts master key from Keychain: {}",
+                String::from_utf8_lossy(&read.stderr).trim()
+            ));
+        }
     };
     *cached = Some(key);
     Ok(key)
@@ -260,5 +288,20 @@ mod tests {
         assert!(open(&key, &sealed).is_err());
         assert!(open(&key, &[0u8; 5]).is_err());
         assert!(open(&[8u8; 32], &seal(&key, b"secret").unwrap()).is_err());
+    }
+
+    #[test]
+    fn parse_master_key_accepts_32_bytes_with_newline() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
+        assert_eq!(parse_master_key(format!("{encoded}\n").as_bytes()).unwrap(), [9u8; 32]);
+    }
+
+    #[test]
+    fn parse_master_key_rejects_bad_input() {
+        use base64::Engine;
+        assert!(parse_master_key(b"not base64!!").is_err());
+        let short = base64::engine::general_purpose::STANDARD.encode([9u8; 16]);
+        assert!(parse_master_key(short.as_bytes()).is_err());
     }
 }

@@ -56,7 +56,6 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString", "NSGeometry", "NSData", "NSArray", "NSNotification", "NSOperation", "block2"] }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSGraphics", "NSButton", "NSImage", "NSStatusItem", "NSStatusBarButton", "NSAppearance", "NSView", "NSControl", "NSVisualEffectView", "NSImageView", "NSRunningApplication", "NSWorkspace", "NSWindow", "NSPanel", "NSColor", "NSResponder", "libc"] }
 objc2-web-kit = { version = "0.3", features = ["WKPreferences", "WKWebView", "WKWebViewConfiguration"] }
-security-framework = "3"
 core-foundation = "0.10"
 
 [dev-dependencies]
