@@ -1,10 +1,12 @@
 import type {
+  MenuBarAccountLabel,
   MenuBarWidgetBackdrop,
   MenuBarWidgetColors,
   MenuBarWidgetStyle,
   MenuBarWidgetTextColors,
   MenuBarWidgetToneModes,
 } from "@/lib/settings"
+import { badgeLetter, fitName } from "@/lib/menubar-account-label"
 import { isWindowsPlatform } from "@/lib/platform"
 import type { TaskbarItem, TaskbarPayload, WidgetRgbaImage } from "@/lib/taskbar-payload"
 
@@ -83,7 +85,7 @@ const MASK_SIDE = 64
 export const MENU_BAR_FONT_FAMILY =
   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
 
-export type FontWeight = 500 | 700
+export type FontWeight = 500 | 600 | 700
 export type MeasureText = (text: string, weight: FontWeight, size: number) => number
 
 /** Same as DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS (not imported: settings pulls in the Tauri store). */
@@ -119,7 +121,9 @@ export type MenuBarProviderLayout = {
   brandColor?: string
   iconMask: Uint8Array | null
   icon: { x: number; y: number; size: number } | null
-  /** Where the items start (right of the icon). */
+  /** Round badge with the account's first letter on the icon's bottom-right corner ("initial" account label). */
+  badge?: { cx: number; cy: number; r: number; letter: string }
+  /** Where the items start (right of the icon, and of the account name when it sits beside the icon). */
   contentX: number
   width: number
   shapes: MenuBarShape[]
@@ -293,9 +297,11 @@ function inlineRow(
   items: TaskbarItem[],
   x: number,
   measure: MeasureText,
-  shorten: boolean
+  shorten: boolean,
+  /** Alphabetic baseline of the row; default: centered in the bar. */
+  rowBaseline?: number
 ): StyleContent {
-  const baseline = baselineFor(MENU_BAR_METRICS.height / 2, s.fontSize)
+  const baseline = rowBaseline ?? baselineFor(MENU_BAR_METRICS.height / 2, s.fontSize)
   const shapes: MenuBarShape[] = []
   let cursor = x
   items.forEach((item, index) => {
@@ -340,14 +346,29 @@ const STYLE_LAYOUTS: Record<
   },
 }
 
+/** Account name styles: badge radius, and the name text sizes / widths of the "beside" and "top" labels. */
+const ACCOUNT_BADGE_RADIUS = 4.25
+const ACCOUNT_NAME_BESIDE = { size: 11, maxWidth: 56, gap: 5 }
+const ACCOUNT_NAME_TOP = { size: 8, maxWidth: 120, offset: 4.75 }
+/** The one-line value row under the name of the "top" account label. */
+const ACCOUNT_TOP_ROW = {
+  labelSize: 9.5 * EXPECTED_SCALE,
+  fontSize: 9.5,
+  labelGap: 2,
+  sepGap: 3,
+  labelAlpha: LABEL_ALPHA,
+  sepAlpha: 120 / 255,
+}
+
 /**
  * Lays out the widget: providers → optional monochrome icon → the items arranged by `style`.
+ * A provider with an `accountName` also shows it as `opts.accountLabel` says (default "initial").
  * Pure: text widths come from the injected `measure`.
  */
 export function layoutMenuBarWidget(
   payload: TaskbarPayload,
   measure: MeasureText,
-  opts: { pad?: number; style?: MenuBarWidgetStyle } = {}
+  opts: { pad?: number; style?: MenuBarWidgetStyle; accountLabel?: MenuBarAccountLabel } = {}
 ): MenuBarLayout | null {
   const m = MENU_BAR_METRICS
   const pad = opts.pad ?? m.pad
@@ -368,18 +389,48 @@ export function layoutMenuBarWidget(
       x += size + m.iconGap
     }
 
+    const accountMode = opts.accountLabel ?? "initial"
+    const accountName = accountMode === "off" ? "" : (provider.accountName?.trim() ?? "")
+    const shapes: MenuBarShape[] = []
+    let badge: MenuBarProviderLayout["badge"]
+    if (accountName && accountMode === "initial" && icon) {
+      const r = ACCOUNT_BADGE_RADIUS
+      badge = { cx: icon.x + icon.size - 1.5, cy: icon.y + icon.size - 1.5, r, letter: badgeLetter(accountName) }
+    } else if (accountName && accountMode !== "top") {
+      // "beside" (also "initial" without an icon): the name between the icon and the values.
+      const { size, maxWidth, gap } = ACCOUNT_NAME_BESIDE
+      const name = fitName(accountName, maxWidth, measure, 600, size)
+      shapes.push(text(name, x, baselineFor(m.height / 2, size), size, 600, { alpha: 0.9 }))
+      x += measure(name, 600, size) + gap
+    }
+
     const contentX = x
     const items = provider.items.map((item) => ({ ...item, value: stripPercent(item.value) }))
-    const content = styleLayout.content(items, contentX, measure)
+    let content: StyleContent
+    if (accountName && accountMode === "top") {
+      // The name on a small top line, every value on one line below it.
+      const { size, maxWidth, offset } = ACCOUNT_NAME_TOP
+      const name = fitName(accountName, maxWidth, measure, 600, size)
+      const compact = opts.style === "compact" || opts.style === "inline-compact"
+      const rowBaseline = baselineFor(m.height / 2 + offset, ACCOUNT_TOP_ROW.fontSize)
+      const row = inlineRow(ACCOUNT_TOP_ROW, items, contentX, measure, compact, rowBaseline)
+      content = {
+        shapes: [text(name, contentX, baselineFor(m.height / 2 - offset, size), size, 600, { alpha: 0.75 }), ...row.shapes],
+        width: Math.max(measure(name, 600, size), row.width),
+      }
+    } else {
+      content = styleLayout.content(items, contentX, measure)
+    }
     x += content.width
     providers.push({
       x: providerX,
       brandColor: provider.brandColor,
       iconMask,
       icon,
+      ...(badge ? { badge } : {}),
       contentX,
       width: x - providerX,
-      shapes: content.shapes,
+      shapes: [...shapes, ...content.shapes],
     })
   }
 
@@ -582,6 +633,8 @@ export type MenuBarRenderOptions = {
   textColors?: MenuBarWidgetTextColors
   /** Per pace state: tone color ("color") or content color ("mono"); combined with `textColors`. */
   toneModes?: MenuBarWidgetToneModes
+  /** How a Claude account provider shows its account name (providers with an `accountName`); default "initial". */
+  accountLabel?: MenuBarAccountLabel
   scale?: number
 }
 
@@ -633,7 +686,11 @@ function renderMenuBarWidgetCanvas(payload: TaskbarPayload, opts: MenuBarRenderO
     return mctx.measureText(value).width
   }
 
-  const layout = layoutMenuBarWidget(payload, measure, { pad: menuBarPad(opts.backdrop), style: opts.style })
+  const layout = layoutMenuBarWidget(payload, measure, {
+    pad: menuBarPad(opts.backdrop),
+    style: opts.style,
+    accountLabel: opts.accountLabel,
+  })
   if (!layout) return null
 
   const canvas = document.createElement("canvas")
@@ -698,6 +755,21 @@ function renderMenuBarWidgetCanvas(payload: TaskbarPayload, opts: MenuBarRenderO
     if (provider.icon && provider.iconMask) {
       // Monochrome like native menu bar icons: same color as the text.
       drawIcon(ctx, provider.iconMask, provider.icon, rgbCss(fg))
+    }
+    if (provider.badge) {
+      // Content-colored disc with the letter cut out of it (and of the icon under it).
+      const { cx, cy, r, letter } = provider.badge
+      ctx.fillStyle = rgbCss(fg)
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.globalCompositeOperation = "destination-out"
+      ctx.font = font(700, 6.5)
+      ctx.textAlign = "center"
+      ctx.fillStyle = "#000"
+      ctx.fillText(letter, cx, cy + 6.5 * BASELINE_FACTOR)
+      ctx.globalCompositeOperation = "source-over"
+      ctx.textAlign = "left"
     }
     for (const shape of provider.shapes) {
       ctx.font = font(shape.weight, shape.size)

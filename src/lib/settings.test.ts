@@ -24,6 +24,14 @@ import {
   saveDockOverlayStyle,
   parseDockOverlayStyle,
   DEFAULT_DOCK_OVERLAY_STYLE,
+  DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL,
+  loadDockOverlayAccountLabel,
+  saveDockOverlayAccountLabel,
+  parseDockOverlayAccountLabel,
+  DEFAULT_MENU_BAR_ACCOUNT_LABEL,
+  loadMenuBarAccountLabel,
+  saveMenuBarAccountLabel,
+  parseMenuBarAccountLabel,
   loadMenuBarWidgetColors,
   loadMenuBarWidgetTextColors,
   loadMenuBarWidgetToneModes,
@@ -557,6 +565,38 @@ describe("settings", () => {
       await expect(loadDockOverlayStyle()).resolves.toBe("pill")
       expect(parseDockOverlayStyle(old)).toBe("pill")
     }
+  })
+
+  it("loads, saves and validates the dock overlay account label", async () => {
+    expect(DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL).toBe("initial")
+    await expect(loadDockOverlayAccountLabel()).resolves.toBe("initial")
+    for (const label of ["off", "initial", "tag", "pill"] as const) {
+      await saveDockOverlayAccountLabel(label)
+      expect(storeState.get("dockOverlayAccountLabel")).toBe(label)
+      await expect(loadDockOverlayAccountLabel()).resolves.toBe(label)
+    }
+    storeState.set("dockOverlayAccountLabel", "banner")
+    await expect(loadDockOverlayAccountLabel()).resolves.toBe("initial")
+    expect(parseDockOverlayAccountLabel(3)).toBeNull()
+    expect(parseDockOverlayAccountLabel("banner")).toBeNull()
+    expect(parseDockOverlayAccountLabel("tag")).toBe("tag")
+    expect(parseDockOverlayAccountLabel("off")).toBe("off")
+  })
+
+  it("loads, saves and validates the menu bar account label", async () => {
+    expect(DEFAULT_MENU_BAR_ACCOUNT_LABEL).toBe("initial")
+    await expect(loadMenuBarAccountLabel()).resolves.toBe("initial")
+    for (const label of ["off", "initial", "beside", "top"] as const) {
+      await saveMenuBarAccountLabel(label)
+      expect(storeState.get("menuBarAccountLabel")).toBe(label)
+      await expect(loadMenuBarAccountLabel()).resolves.toBe(label)
+    }
+    storeState.set("menuBarAccountLabel", "banner")
+    await expect(loadMenuBarAccountLabel()).resolves.toBe("initial")
+    expect(parseMenuBarAccountLabel(3)).toBeNull()
+    expect(parseMenuBarAccountLabel("banner")).toBeNull()
+    expect(parseMenuBarAccountLabel("top")).toBe("top")
+    expect(parseMenuBarAccountLabel("off")).toBe("off")
   })
 
   it("loads the default pace thresholds when missing or invalid", async () => {

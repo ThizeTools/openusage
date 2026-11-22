@@ -16,6 +16,8 @@ mod win;
 #[cfg(target_os = "macos")]
 mod dock;
 #[cfg(target_os = "macos")]
+mod dock_owners;
+#[cfg(target_os = "macos")]
 mod mac;
 
 /// One labeled value, e.g. label "Session", value "42/55%", tone "ahead".
@@ -74,6 +76,10 @@ pub struct DockOverlay {
     pub bundle_ids: Vec<String>,
     /// base64 PNG
     pub png: String,
+    /// OpenUsage account (Claude accounts): the overlay goes only on the Dock tile of the app copy signed in to it.
+    /// `None`: the first free tile of the app.
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -1,5 +1,10 @@
 import { defaultToneColors } from "@/lib/menubar-widget-image"
-import type { MenuBarWidgetColors, MenuBarWidgetTextColors, MenuBarWidgetToneModes } from "@/lib/settings"
+import type {
+  DockOverlayAccountLabel,
+  MenuBarWidgetColors,
+  MenuBarWidgetTextColors,
+  MenuBarWidgetToneModes,
+} from "@/lib/settings"
 import type { TaskbarProvider } from "@/lib/taskbar-payload"
 
 /**
@@ -30,7 +35,15 @@ export type DockOverlayOptions = {
   toneModes: MenuBarWidgetToneModes
   /** Mono / Color per text part, same rules as the menu bar widget. Missing → label mono, used color, expected mono. */
   textColors?: MenuBarWidgetTextColors
+  /** Draws the account name too (style + name). */
+  account?: { mode: DockOverlayAccountLabel; name: string }
 }
+
+/** Widest an account name may be drawn, in units. */
+const ACCOUNT_NAME_MAX_WIDTH = 112
+/** Dark fill and stroke shared by the usage pill and the account name shapes. */
+const SHAPE_FILL = "rgba(30,30,34,0.9)"
+const SHAPE_STROKE = "rgba(255,255,255,0.18)"
 
 const DEFAULT_TEXT_COLORS: MenuBarWidgetTextColors = { label: "mono", used: "color", expected: "mono" }
 const MONO = "#f2f2f2"
@@ -154,7 +167,30 @@ function pillPath(ctx: Ctx, x: number, y: number, w: number, h: number) {
   ctx.roundRect(x, y, w, h, Math.min(h / 2, 11))
 }
 
-function drawPill(ctx: Ctx, metrics: DockMetric[], toneColors: string[], textColors: MenuBarWidgetTextColors) {
+/** `text` cut with "…" so it fits `maxWidth` in the context's current font; whole when it already fits. */
+export function fitText(ctx: Pick<Ctx, "measureText">, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text
+  let cut = Array.from(text)
+  while (cut.length > 0 && ctx.measureText(cut.join("") + "…").width > maxWidth) cut = cut.slice(0, -1)
+  return cut.join("") + "…"
+}
+
+/** Fills and strokes the current path with the dark shape style of the usage pill. */
+function paintShape(ctx: Ctx, stroke = SHAPE_STROKE, lineWidth = 0.8) {
+  ctx.fillStyle = SHAPE_FILL
+  ctx.fill()
+  ctx.lineWidth = lineWidth
+  ctx.strokeStyle = stroke
+  ctx.stroke()
+}
+
+function drawPill(
+  ctx: Ctx,
+  metrics: DockMetric[],
+  toneColors: string[],
+  textColors: MenuBarWidgetTextColors,
+  title?: string
+) {
   // Sized to stay readable at the Dock's small icon size (1 unit ≈ 0.58pt at the default 58pt tile).
   const labelSize = 12.5
   const valueSize = 16
@@ -164,23 +200,33 @@ function drawPill(ctx: Ctx, metrics: DockMetric[], toneColors: string[], textCol
     const labelW = labelWidth(ctx, label, labelSize)
     return { label, runs, labelW, width: (label ? labelW + 3 : 0) + runsWidth(ctx, runs, valueSize) }
   })
+  // The account name (when given) is an extra first line above the metrics.
+  const titleSize = labelSize
+  const titleH = title ? titleSize + 3 : 0
+  // fitText measures with the current font: set the title's before cutting.
+  ctx.font = `600 ${titleSize}px ${LABEL_FONT}`
+  const titleText = title ? fitText(ctx, title, ACCOUNT_NAME_MAX_WIDTH) : ""
+  const titleW = title ? labelWidth(ctx, titleText, titleSize) : 0
   // One line per metric, stacked; extra lines grow upward. The pill's bottom edge sits just below the icon.
   const lineH = valueSize + 2
-  const w = Math.max(...items.map((item) => item.width)) + 16
-  const h = items.length * lineH + 5
+  const w = Math.max(Math.max(...items.map((item) => item.width)) + 16, title ? titleW + 16 : 0)
+  const h = items.length * lineH + 5 + titleH
   const bottom = SQ_BOTTOM + 7.7 + 1.5
   const top = bottom - h
   const left = SQ_CENTER_X - w / 2
 
   pillPath(ctx, left, top, w, h)
-  ctx.fillStyle = "rgba(30,30,34,0.9)"
-  ctx.fill()
-  ctx.lineWidth = 0.8
-  ctx.strokeStyle = "rgba(255,255,255,0.18)"
-  ctx.stroke()
+  paintShape(ctx)
+
+  if (title) {
+    ctx.textAlign = "center"
+    const titleBaseline = top + 2.5 + titleH / 2 + titleSize * BASELINE_FACTOR
+    drawLabel(ctx, titleText, SQ_CENTER_X, titleBaseline, titleSize, "rgba(255,255,255,0.85)")
+    ctx.textAlign = "left"
+  }
 
   items.forEach((item, i) => {
-    const cy = top + 2.5 + lineH * (i + 0.5)
+    const cy = top + 2.5 + titleH + lineH * (i + 0.5)
     const baseline = cy + valueSize * BASELINE_FACTOR
     const fills = dockTextFills(toneColors[i], textColors)
     let x = left + 8
@@ -193,10 +239,40 @@ function drawPill(ctx: Ctx, metrics: DockMetric[], toneColors: string[], textCol
   })
 }
 
+/** "initial": round badge at the icon's top-left corner with the name's first letter. */
+function drawInitialBadge(ctx: Ctx, name: string) {
+  const letter = Array.from(name.trim())[0]?.toUpperCase()
+  if (!letter) return
+  const cx = SQ.x + 4
+  const cy = SQ.y + 4
+  ctx.beginPath()
+  ctx.arc(cx, cy, 12, 0, Math.PI * 2)
+  paintShape(ctx, "rgba(255,255,255,0.35)", 1)
+  ctx.textAlign = "center"
+  drawLabel(ctx, letter, cx, cy + 15 * BASELINE_FACTOR, 15, NEUTRAL_TONE)
+  ctx.textAlign = "left"
+}
+
+/** "tag": small pill centered on the icon's top edge with the (truncated) name. */
+function drawNameTag(ctx: Ctx, name: string) {
+  const size = 12.5
+  ctx.font = `600 ${size}px ${LABEL_FONT}`
+  const text = fitText(ctx, name.trim(), ACCOUNT_NAME_MAX_WIDTH)
+  if (!text) return
+  const w = labelWidth(ctx, text, size) + 14
+  const h = 17
+  const cy = SQ.y - 1
+  const left = SQ_CENTER_X - w / 2
+  ctx.beginPath()
+  ctx.roundRect(left, cy - h / 2, w, h, h / 2)
+  paintShape(ctx)
+  drawLabel(ctx, text, left + 7, cy + size * BASELINE_FACTOR, size, NEUTRAL_TONE)
+}
+
 /**
  * Renders a provider's Dock overlay to a transparent PNG (base64, no data: prefix) on a DOCK_OVERLAY_CANVAS x
- * DOCK_OVERLAY_CANVAS unit canvas at DOCK_OVERLAY_SCALE px per unit. Null when the provider has no numeric fraction
- * or the canvas is unavailable.
+ * DOCK_OVERLAY_CANVAS unit canvas at DOCK_OVERLAY_SCALE px per unit. With `opts.account` the account name is drawn
+ * too. Null when the provider has no numeric fraction or the canvas is unavailable.
  */
 export async function renderDockOverlayPng(
   provider: TaskbarProvider,
@@ -213,7 +289,11 @@ export async function renderDockOverlayPng(
   ctx.textBaseline = "alphabetic"
 
   const colors = metrics.map((metric) => dockToneColor(metric.tone, opts.colors, opts.toneModes))
-  drawPill(ctx, metrics, colors, opts.textColors ?? DEFAULT_TEXT_COLORS)
+  const account = opts.account
+  const title = account?.mode === "pill" ? account.name.trim() : undefined
+  drawPill(ctx, metrics, colors, opts.textColors ?? DEFAULT_TEXT_COLORS, title || undefined)
+  if (account?.mode === "initial") drawInitialBadge(ctx, account.name)
+  if (account?.mode === "tag") drawNameTag(ctx, account.name)
 
   const dataUrl = canvas.toDataURL("image/png")
   const comma = dataUrl.indexOf(",")

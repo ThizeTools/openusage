@@ -5,6 +5,7 @@ import { LazyStore } from "@tauri-apps/plugin-store"
 import { useProbeState } from "@/hooks/app/use-probe-state"
 import { useAccountsChanged } from "@/hooks/app/use-accounts-changed"
 import { useNowTicker } from "@/hooks/use-now-ticker"
+import { claudeAccountId } from "@/lib/claude-desktop"
 import type { CachedPluginOutput, PluginMeta, PluginOutput } from "@/lib/plugin-types"
 import { loadAvailablePlugins, reloadPluginList } from "@/lib/provider-discovery"
 import {
@@ -38,6 +39,8 @@ type ProbeResultEvent = { batchId: string; output: PluginOutput }
 export function useWidgetRows(): {
   rows: WidgetRow[]
   rowsFor: (selection: SurfaceProvidersOverride | null) => WidgetRow[]
+  /** Claude accounts registered in OpenUsage (Dock overlays name the account from 2 on). */
+  claudeAccountCount: number
 } {
   const { pluginStates, handleProbeResult, hydrateFromCache } = useProbeState({})
 
@@ -189,5 +192,7 @@ export function useWidgetRows(): {
       nowMs,
     })
 
-  return { rows: rowsFor(null), rowsFor }
+  const claudeAccountCount = pluginsMeta.filter((meta) => claudeAccountId(meta.id) !== null).length
+
+  return { rows: rowsFor(null), rowsFor, claudeAccountCount }
 }

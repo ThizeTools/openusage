@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   dockToneColor,
+  fitText,
   renderDockOverlayPng,
   dockTextFills,
   selectDockMetrics,
@@ -68,6 +69,24 @@ describe("value text and labels", () => {
     expect(shortLabel("Session")).toBe("S")
     expect(shortLabel("weekly")).toBe("W")
     expect(shortLabel("")).toBe("")
+  })
+})
+
+describe("fitText", () => {
+  /** Every character is 10 units wide. */
+  const ctx = { measureText: (text: string) => ({ width: text.length * 10 }) as TextMetrics }
+
+  it("keeps text that fits", () => {
+    expect(fitText(ctx, "Work", 40)).toBe("Work")
+  })
+
+  it("cuts the text and adds an ellipsis so it fits", () => {
+    expect(fitText(ctx, "ThizeMlLong", 50)).toBe("Thiz…")
+    expect(fitText(ctx, "ThizeMlLong", 50).length * 10).toBeLessThanOrEqual(50)
+  })
+
+  it("keeps whole characters outside the BMP", () => {
+    expect(fitText(ctx, "😀😀😀😀😀😀", 30)).toBe("😀…")
   })
 })
 

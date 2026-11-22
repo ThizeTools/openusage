@@ -28,6 +28,21 @@ export const DOCK_OVERLAY_STYLES = ["off", "pill"] as const;
 export type DockOverlayStyle = (typeof DOCK_OVERLAY_STYLES)[number];
 
 /**
+ * macOS: how the Dock overlay names the account when 2+ Claude accounts are open. "off" = no name, "initial" = round
+ * badge with the first letter, "tag" = small pill on the icon's top edge, "pill" = name as an extra line in the usage pill.
+ */
+export const DOCK_OVERLAY_ACCOUNT_LABELS = ["off", "initial", "tag", "pill"] as const;
+export type DockOverlayAccountLabel = (typeof DOCK_OVERLAY_ACCOUNT_LABELS)[number];
+
+/**
+ * How the menu bar widget names a Claude account when 2+ are registered. "off" = no name, "initial" = round badge with
+ * the first letter on the icon, "beside" = the name as text between the icon and the values, "top" = the name on a small top
+ * line with all values on one line below it.
+ */
+export const MENU_BAR_ACCOUNT_LABELS = ["off", "initial", "beside", "top"] as const;
+export type MenuBarAccountLabel = (typeof MENU_BAR_ACCOUNT_LABELS)[number];
+
+/**
  * The menu bar widget's background card: one parametric look instead of presets.
  * `color` is "auto" (follows the menu bar: dark card on a dark bar, white on a light one) or `#rrggbb`.
  * `opacity`, `glass` and `blur` are 0..100. Blur is real (native, macOS only); the PNG never draws it.
@@ -83,6 +98,8 @@ const LEGACY_MENU_BAR_WIDGET_BACKGROUND_KEY = "menuBarWidgetBackground";
 const MENU_BAR_WIDGET_BACKDROP_KEY = "menuBarWidgetBackdrop";
 const MENU_BAR_WIDGET_STYLE_KEY = "menuBarWidgetStyle";
 const DOCK_OVERLAY_STYLE_KEY = "dockOverlayStyle";
+const DOCK_OVERLAY_ACCOUNT_LABEL_KEY = "dockOverlayAccountLabel";
+const MENU_BAR_ACCOUNT_LABEL_KEY = "menuBarAccountLabel";
 const MENU_BAR_WIDGET_COLORS_KEY = "menuBarWidgetColors";
 const MENU_BAR_WIDGET_TEXT_COLORS_KEY = "menuBarWidgetTextColors";
 const MENU_BAR_WIDGET_TONE_MODES_KEY = "menuBarWidgetToneModes";
@@ -105,6 +122,8 @@ export const DEFAULT_MENU_BAR_WIDGET_BACKDROP: MenuBarWidgetBackdrop = {
 export const DEFAULT_MENU_BAR_WIDGET_STYLE: MenuBarWidgetStyle = "compact";
 export const DEFAULT_PACE_THRESHOLDS: PaceThresholds = { healthy: 80, closeToLimit: 100 };
 export const DEFAULT_DOCK_OVERLAY_STYLE: DockOverlayStyle = "pill";
+export const DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL: DockOverlayAccountLabel = "initial";
+export const DEFAULT_MENU_BAR_ACCOUNT_LABEL: MenuBarAccountLabel = "initial";
 export const DEFAULT_MENU_BAR_WIDGET_COLORS: MenuBarWidgetColors = {};
 export const DEFAULT_MENU_BAR_WIDGET_TEXT_COLORS: MenuBarWidgetTextColors = {
   label: "mono",
@@ -517,6 +536,12 @@ export async function saveMenuBarWidgetStyle(value: MenuBarWidgetStyle): Promise
   await store.save()
 }
 
+export function parseDockOverlayAccountLabel(value: unknown): DockOverlayAccountLabel | null {
+  return typeof value === "string" && (DOCK_OVERLAY_ACCOUNT_LABELS as readonly string[]).includes(value)
+    ? (value as DockOverlayAccountLabel)
+    : null
+}
+
 export async function loadDockOverlayStyle(): Promise<DockOverlayStyle> {
   const stored = await store.get<unknown>(DOCK_OVERLAY_STYLE_KEY)
   return parseDockOverlayStyle(stored) ?? DEFAULT_DOCK_OVERLAY_STYLE
@@ -524,6 +549,32 @@ export async function loadDockOverlayStyle(): Promise<DockOverlayStyle> {
 
 export async function saveDockOverlayStyle(value: DockOverlayStyle): Promise<void> {
   await store.set(DOCK_OVERLAY_STYLE_KEY, value)
+  await store.save()
+}
+
+export async function loadDockOverlayAccountLabel(): Promise<DockOverlayAccountLabel> {
+  const stored = await store.get<unknown>(DOCK_OVERLAY_ACCOUNT_LABEL_KEY)
+  return parseDockOverlayAccountLabel(stored) ?? DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL
+}
+
+export async function saveDockOverlayAccountLabel(value: DockOverlayAccountLabel): Promise<void> {
+  await store.set(DOCK_OVERLAY_ACCOUNT_LABEL_KEY, value)
+  await store.save()
+}
+
+export function parseMenuBarAccountLabel(value: unknown): MenuBarAccountLabel | null {
+  return typeof value === "string" && (MENU_BAR_ACCOUNT_LABELS as readonly string[]).includes(value)
+    ? (value as MenuBarAccountLabel)
+    : null
+}
+
+export async function loadMenuBarAccountLabel(): Promise<MenuBarAccountLabel> {
+  const stored = await store.get<unknown>(MENU_BAR_ACCOUNT_LABEL_KEY)
+  return parseMenuBarAccountLabel(stored) ?? DEFAULT_MENU_BAR_ACCOUNT_LABEL
+}
+
+export async function saveMenuBarAccountLabel(value: MenuBarAccountLabel): Promise<void> {
+  await store.set(MENU_BAR_ACCOUNT_LABEL_KEY, value)
   await store.save()
 }
 

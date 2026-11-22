@@ -123,6 +123,90 @@ describe("layoutMenuBarWidget (shared)", () => {
   })
 })
 
+describe("account name (2+ Claude accounts)", () => {
+  const named = (name: string | undefined, withIcon = true): TaskbarPayload =>
+    payload([{ ...provider(TWO, withIcon), ...(name !== undefined ? { accountName: name } : {}) }])
+  const layout = (p: TaskbarPayload, accountLabel?: "off" | "initial" | "beside" | "top", style: keyof typeof S = "stacked") =>
+    layoutMenuBarWidget(p, measure, { style, accountLabel })!
+
+  it("without an account name the layout is exactly the same, whatever the label", () => {
+    const plain = layoutMenuBarWidget(payload([provider(TWO)]), measure, { style: "stacked" })
+    for (const mode of ["initial", "beside", "top"] as const) {
+      expect(layout(payload([provider(TWO)]), mode)).toEqual(plain)
+      expect(layout(named("  "), mode)).toEqual(plain)
+    }
+  })
+
+  it('"off" ignores the account name: same layout as without it', () => {
+    const plain = layoutMenuBarWidget(payload([provider(TWO)]), measure, { style: "stacked" })
+    expect(layout(named("blu"), "off")).toEqual(plain)
+    expect(layout(named("blu", false), "off")).toEqual(layout(payload([provider(TWO, false)]), "off"))
+  })
+
+  it('"initial" (default) adds a round badge on the icon corner and keeps the x positions', () => {
+    const plain = layout(payload([provider(TWO)]), undefined)
+    for (const mode of [undefined, "initial" as const]) {
+      const l = layout(named("blu"), mode)
+      const p = l.providers[0]
+      expect(p.badge).toEqual({ cx: M.pad + 15 - 1.5, cy: (M.height - 15) / 2 + 15 - 1.5, r: 4.25, letter: "B" })
+      expect(p.contentX).toBe(ICON_END)
+      expect(p.shapes).toEqual(plain.providers[0].shapes)
+      expect(l.width).toBe(plain.width)
+    }
+  })
+
+  it('"initial" without an icon behaves like "beside"', () => {
+    const p = layout(named("Blu", false), "initial").providers[0]
+    expect(p.badge).toBeUndefined()
+    expect(texts(p)[0]).toMatchObject({ text: "Blu", x: M.pad })
+  })
+
+  it('"beside" puts the name after the icon and moves the values right by its width + 5', () => {
+    const plain = layout(payload([provider(TWO)]), "beside").providers[0]
+    const p = layout(named("Blu"), "beside").providers[0]
+    const [name, ...rest] = texts(p)
+    expect(p.badge).toBeUndefined()
+    expect(name).toMatchObject({ text: "Blu", x: ICON_END, size: 11, weight: 600, alpha: 0.9, tone: undefined })
+    expect(name.part).toBeUndefined()
+    expect(name.baseline).toBeCloseTo(base(M.height / 2, 11))
+    const shift = measure("Blu") + 5
+    expect(p.contentX).toBe(ICON_END + shift)
+    expect(rest.map((s) => s.x)).toEqual(texts(plain).map((s) => s.x + shift))
+    expect(p.width).toBe(plain.width + shift)
+  })
+
+  it('"top" draws the name on a top line and all values on one line below it', () => {
+    const p = layout(named("Blu"), "top").providers[0]
+    const [name, ...rest] = texts(p)
+    expect(name).toMatchObject({ text: "Blu", x: ICON_END, size: 8, weight: 600, alpha: 0.75 })
+    expect(name.baseline).toBeCloseTo(base(M.height / 2 - 4.75, 8))
+    // Session 42 · Weekly 9, all on one baseline below the name.
+    expect(rest.map((s) => s.text)).toEqual(["Session", "42", "·", "Weekly", "9"])
+    for (const shape of rest) expect(shape.baseline).toBeCloseTo(base(M.height / 2 + 4.75, 9.5))
+    expect(rest[0].x).toBe(ICON_END)
+    expect(p.contentX).toBe(ICON_END)
+    const rowEnd = rest[rest.length - 1].x + measure("9", 700, 9.5)
+    expect(p.width).toBeCloseTo(ICON_END - M.pad + Math.max(measure("Blu"), rowEnd - ICON_END))
+  })
+
+  it('"top" shortens the labels in the compact styles', () => {
+    for (const style of ["compact", "inline-compact"] as const) {
+      const rest = texts(layout(named("Blu"), "top", style).providers[0]).slice(1)
+      expect(rest.filter((s) => s.part === "label").map((s) => s.text)).toEqual(["S", "W"])
+    }
+  })
+
+  it("cuts a long name with an ellipsis to fit", () => {
+    const long = "A".repeat(40)
+    const beside = texts(layout(named(long), "beside").providers[0])[0]
+    expect(beside.text.endsWith("…")).toBe(true)
+    expect(measure(beside.text)).toBeLessThanOrEqual(56)
+    const top = texts(layout(named(long), "top").providers[0])[0]
+    expect(top.text.endsWith("…")).toBe(true)
+    expect(measure(top.text)).toBeLessThanOrEqual(120)
+  })
+})
+
 describe("menuBarPad", () => {
   it("is 3pt without a background and 8pt with one", () => {
     expect(menuBarPad(OFF)).toBe(3)
@@ -414,7 +498,7 @@ describe("defaultToneColors", () => {
 })
 
 describe("renderMenuBarWidgetPng", () => {
-  type Draw = { text: string; fillStyle: string; font: string; y: number; baseline: string }
+  type Draw = { text: string; fillStyle: string; font: string; y: number; baseline: string; op: string }
 
   /** Replaces canvas with a recording fake: every measure and fillText sees the current font/fill. */
   function fakeCanvas() {
@@ -429,6 +513,8 @@ describe("renderMenuBarWidgetPng", () => {
       lineWidth: 1,
       textAlign: "left",
       textBaseline: "alphabetic",
+      globalCompositeOperation: "source-over",
+      arc: vi.fn(),
       scale: vi.fn(),
       beginPath: vi.fn(),
       roundRect: vi.fn(),
@@ -448,7 +534,14 @@ describe("renderMenuBarWidgetPng", () => {
         return { width: value.length * 6 }
       },
       fillText(value: string, _x: number, y: number) {
-        drawn.push({ text: value, fillStyle: String(ctx.fillStyle), font: ctx.font, y, baseline: ctx.textBaseline })
+        drawn.push({
+          text: value,
+          fillStyle: String(ctx.fillStyle),
+          font: ctx.font,
+          y,
+          baseline: ctx.textBaseline,
+          op: ctx.globalCompositeOperation,
+        })
       },
     }
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
@@ -480,6 +573,29 @@ describe("renderMenuBarWidgetPng", () => {
   it("returns the base64 body of the PNG", async () => {
     fakeCanvas()
     await expect(renderMenuBarWidgetPng(demo, opts)).resolves.toBe("QUJD")
+  })
+
+  it("draws the account badge as a disc with the letter cut out, and restores the canvas state", async () => {
+    const { drawn, ctx } = fakeCanvas()
+    Object.assign(ctx, {
+      createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }),
+      putImageData: vi.fn(),
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+    })
+    const named = payload([{ ...provider([item("Session", "42%")]), accountName: "blu" }])
+    await renderMenuBarWidgetPng(named, opts)
+    const letter = drawn.find((d) => d.text === "B")!
+    expect(letter).toMatchObject({ op: "destination-out", font: expect.stringMatching(/^700 6\.5px /) })
+    expect(ctx.arc).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), 4.25, 0, Math.PI * 2)
+    expect(letter.y).toBeCloseTo(vi.mocked(ctx.arc).mock.calls[0][1] + 6.5 * 0.35)
+    expect(ctx.globalCompositeOperation).toBe("source-over")
+    expect(ctx.textAlign).toBe("left")
+    // The other texts are drawn normally; "beside" has no badge.
+    expect(drawn.find((d) => d.text === "42")!.op).toBe("source-over")
+    vi.mocked(ctx.arc).mockClear()
+    await renderMenuBarWidgetPng(named, { ...opts, accountLabel: "beside" })
+    expect(ctx.arc).not.toHaveBeenCalled()
   })
 
   it("renderMenuBarWidgetRgba returns the raw pixels as base64 with the canvas size", async () => {

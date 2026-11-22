@@ -9,6 +9,9 @@ const state = vi.hoisted(() => ({
   rgbaMock: vi.fn(),
   dockMock: vi.fn(),
   dockStyle: "off",
+  dockAccountLabel: "initial",
+  menuBarAccountLabel: "initial",
+  claudeAccountCount: 1,
   overrides: {} as Record<string, unknown>,
 }))
 
@@ -35,11 +38,11 @@ vi.mock("@/hooks/app/use-widget-rows", () => {
     tone: "on-track",
     metrics: [{ label: "Session", fraction: 0.4, expectedFraction: 0.3, tone: "on-track" }],
   })
-  const all = [row("claude", "Claude"), row("codex", "Codex")]
+  const all = [row("claude", "Claude"), row("codex", "Codex"), row("claude@abc", "Claude · Work")]
   // Global selection shows claude only; an override picks its own ids.
   const rowsFor = (selection: { providerIds: string[] | null } | null) =>
     all.filter((r) => (selection?.providerIds ?? ["claude"]).includes(r.id))
-  return { useWidgetRows: () => ({ rows: rowsFor(null), rowsFor }) }
+  return { useWidgetRows: () => ({ rows: rowsFor(null), rowsFor, claudeAccountCount: state.claudeAccountCount }) }
 })
 vi.mock("@/lib/icon-mask", () => ({ getIconMask: vi.fn(async () => null) }))
 vi.mock("@/lib/settings", async () => {
@@ -47,6 +50,8 @@ vi.mock("@/lib/settings", async () => {
   return {
     ...actual,
     loadDockOverlayStyle: vi.fn(async () => state.dockStyle),
+    loadDockOverlayAccountLabel: vi.fn(async () => state.dockAccountLabel),
+    loadMenuBarAccountLabel: vi.fn(async () => state.menuBarAccountLabel),
     loadMenuBarWidgetBackdrop: vi.fn(async () => actual.DEFAULT_MENU_BAR_WIDGET_BACKDROP),
     loadMenuBarWidgetStyle: vi.fn(async () => "stacked"),
     loadMenuBarWidgetColors: vi.fn(async () => ({})),
@@ -79,6 +84,9 @@ describe("useTaskbarWidgetSync", () => {
     state.dockMock.mockReset()
     state.dockMock.mockResolvedValue("DOCK")
     state.dockStyle = "off"
+    state.dockAccountLabel = "initial"
+    state.menuBarAccountLabel = "initial"
+    state.claudeAccountCount = 1
     state.overrides = {}
   })
 
@@ -209,6 +217,88 @@ describe("useTaskbarWidgetSync", () => {
     )
     // The menu bar still shows the global selection.
     expect((sentPayload()?.providers as { id: string }[]).map((p) => p.id)).toEqual(["claude"])
+  })
+
+  it("sends the account id and draws the account name with 2+ Claude accounts registered", async () => {
+    state.mac = true
+    state.dockStyle = "pill"
+    state.claudeAccountCount = 2
+    state.overrides = { dock: { providers: { providerIds: ["claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() =>
+      expect(lastPayload()?.dockOverlays).toEqual([
+        { bundleIds: ["com.anthropic.claudefordesktop"], png: "DOCK", accountId: "abc" },
+      ])
+    )
+    expect(state.dockMock.mock.calls.at(-1)?.[1].account).toEqual({ mode: "initial", name: "Work" })
+  })
+
+  it('sends the account id without the account name when the Dock mode is "off"', async () => {
+    state.mac = true
+    state.dockStyle = "pill"
+    state.dockAccountLabel = "off"
+    state.claudeAccountCount = 2
+    state.overrides = { dock: { providers: { providerIds: ["claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() =>
+      expect(lastPayload()?.dockOverlays).toEqual([
+        { bundleIds: ["com.anthropic.claudefordesktop"], png: "DOCK", accountId: "abc" },
+      ])
+    )
+    expect(state.dockMock.mock.calls.at(-1)?.[1].account).toBeUndefined()
+  })
+
+  it("sends the account id without the account name with one Claude account registered", async () => {
+    state.mac = true
+    state.dockStyle = "pill"
+    state.claudeAccountCount = 1
+    state.overrides = { dock: { providers: { providerIds: ["claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() =>
+      expect(lastPayload()?.dockOverlays).toEqual([
+        { bundleIds: ["com.anthropic.claudefordesktop"], png: "DOCK", accountId: "abc" },
+      ])
+    )
+    expect(state.dockMock.mock.calls.at(-1)?.[1].account).toBeUndefined()
+  })
+
+  it("names the Claude accounts in the menu bar widget with 2+ accounts registered", async () => {
+    state.mac = true
+    state.claudeAccountCount = 2
+    state.overrides = { menuBar: { providers: { providerIds: ["claude", "claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() => expect((lastPayload()?.providers as { id: string }[]).length).toBe(2))
+    const providers = lastPayload()?.providers as { id: string; accountName?: string }[]
+    expect(providers.find((p) => p.id === "claude@abc")?.accountName).toBe("Work")
+    expect(providers.find((p) => p.id === "claude")).not.toHaveProperty("accountName")
+    expect(state.pngMock.mock.calls.at(-1)?.[0].providers.find((p: { id: string }) => p.id === "claude@abc")).toMatchObject({
+      accountName: "Work",
+    })
+    expect(state.pngMock.mock.calls.at(-1)?.[1].accountLabel).toBe("initial")
+  })
+
+  it('sends no account name to the menu bar widget when its mode is "off"', async () => {
+    state.mac = true
+    state.menuBarAccountLabel = "off"
+    state.claudeAccountCount = 2
+    state.overrides = { menuBar: { providers: { providerIds: ["claude", "claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() => expect((lastPayload()?.providers as { id: string }[]).length).toBe(2))
+    await waitFor(() => expect(state.pngMock.mock.calls.at(-1)?.[1].accountLabel).toBe("off"))
+    const providers = lastPayload()?.providers as { id: string }[]
+    expect(providers.every((p) => !("accountName" in p))).toBe(true)
+    expect(state.pngMock.mock.calls.at(-1)?.[0].providers.every((p: object) => !("accountName" in p))).toBe(true)
+  })
+
+  it("sends no account name to the menu bar widget with one Claude account registered", async () => {
+    state.mac = true
+    state.claudeAccountCount = 1
+    state.overrides = { menuBar: { providers: { providerIds: ["claude@abc"], providerMetrics: {} } } }
+    renderHook(() => useTaskbarWidgetSync())
+    await waitFor(() => expect((lastPayload()?.providers as { id: string }[])[0].id).toBe("claude@abc"))
+    const providers = lastPayload()?.providers as { id: string }[]
+    expect(providers[0]).not.toHaveProperty("accountName")
+    expect(state.rgbaMock).not.toHaveBeenCalled()
   })
 
   it("menu bar providers override changes the widget providers, not the Dock", async () => {

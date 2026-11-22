@@ -10,6 +10,12 @@ export function claudeAccountId(pluginId: string): string | null {
   return accountId === "" ? null : accountId
 }
 
+/** Account part of an account instance's name: "Claude · Work" -> "Work"; a name without " · " stays whole. */
+export function accountLabel(name: string): string {
+  const at = name.lastIndexOf(" · ")
+  return at < 0 ? name : name.slice(at + 3)
+}
+
 /** Opens Claude Desktop signed in as that OpenUsage Claude account (Windows, macOS). */
 export function openClaudeDesktop(accountId: string): Promise<void> {
   return invoke("open_claude_desktop", { accountId })

@@ -1,5 +1,6 @@
-import { useState, type ComponentType } from "react"
+import { useEffect, useState, type ComponentType } from "react"
 import { ContrastIcon, DockIcon, PanelTopIcon, SquareCheckBigIcon } from "lucide-react"
+import { AccountLabelPicker, MENU_BAR_ACCOUNT_LABEL_NAMES } from "@/components/widget-tab/account-label-picker"
 import { BackdropControls } from "@/components/widget-tab/backdrop-controls"
 import { ResetColorsButton, TextColorRows, ToneRows } from "@/components/widget-tab/color-rows"
 import { MenuBarPreviewStrip } from "@/components/widget-tab/menu-bar-preview-strip"
@@ -14,9 +15,15 @@ import type { WidgetTabLayoutProps, WidgetTabModel } from "@/components/widget-t
 import { useSurfaceOverrides } from "@/components/widget-tab/use-surface-overrides"
 import { Switch } from "@/components/ui/switch"
 import { isMacPlatform, widgetSurfaceName } from "@/lib/platform"
+import {
+  DEFAULT_MENU_BAR_ACCOUNT_LABEL,
+  loadMenuBarAccountLabel,
+  saveMenuBarAccountLabel,
+  type MenuBarAccountLabel,
+} from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
-type SectionId = "layout" | "background"
+type SectionId = "layout" | "background" | "account"
 type PaneId = "providers" | "dock" | "menubar" | "colors"
 
 const PANE_HEADING = "pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
@@ -26,6 +33,7 @@ function MenuBarPane({ globalModel, surface }: { globalModel: WidgetTabModel; su
   const [overrides, setOverrides] = useSurfaceOverrides("menuBar")
   // The preview follows this surface's own providers / colors.
   const model = withOverrides(globalModel, overrides)
+  const [accountLabel, setAccountLabel] = useState<MenuBarAccountLabel>(DEFAULT_MENU_BAR_ACCOUNT_LABEL)
   const [openSections, setOpenSections] = useState<ReadonlySet<SectionId>>(new Set())
   const sectionProps = (id: SectionId) => ({
     open: openSections.has(id),
@@ -38,9 +46,26 @@ function MenuBarPane({ globalModel, surface }: { globalModel: WidgetTabModel; su
       }),
   })
 
+  useEffect(() => {
+    let cancelled = false
+    loadMenuBarAccountLabel()
+      .then((stored) => {
+        if (!cancelled) setAccountLabel(stored)
+      })
+      .catch((error) => console.error("Failed to load menu bar account label:", error))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const saveAccountLabel = (next: MenuBarAccountLabel) => {
+    setAccountLabel(next)
+    saveMenuBarAccountLabel(next).catch((error) => console.error("Failed to save menu bar account label:", error))
+  }
+
   return (
     <div className="space-y-3">
-      <MenuBarPreviewStrip model={model} label="Live preview" />
+      <MenuBarPreviewStrip model={model} label="Live preview" accountLabel={accountLabel} />
 
       <label className="flex min-h-10 items-center gap-3 rounded-lg border border-border/60 bg-card px-3 text-[13px] text-foreground select-none">
         <span className="flex-1">Show widget in {surface}</span>
@@ -58,6 +83,9 @@ function MenuBarPane({ globalModel, surface }: { globalModel: WidgetTabModel; su
         </Section>
         <Section title="Background" summary={summarizeBackdrop(model.backdrop)} {...sectionProps("background")}>
           <BackdropControls model={model} />
+        </Section>
+        <Section title="Account name" summary={MENU_BAR_ACCOUNT_LABEL_NAMES[accountLabel]} {...sectionProps("account")}>
+          <AccountLabelPicker value={accountLabel} onChange={saveAccountLabel} />
         </Section>
       </div>
 

@@ -14,6 +14,7 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::mpsc;
 use std::sync::OnceLock;
@@ -182,6 +183,12 @@ struct DockItem {
     y: f64,
     w: f64,
     h: f64,
+    /// The tile's AX element: the same tile compares equal across reads (CFEqual).
+    element: CFType,
+    /// Whether the tile's app is running.
+    running: bool,
+    /// Claude account uuid of the process shown by this tile, when the app runs one copy per account.
+    account: Option<String>,
 }
 
 /// Process id of the Dock, `None` when it is not running.
@@ -215,7 +222,19 @@ fn read_items(pid: i32) -> Option<Vec<DockItem>> {
         {
             continue;
         }
-        items.push(DockItem { bundle_id, x: position.x, y: position.y, w: size.width, h: size.height });
+        let running = copy_attribute(&item, "AXIsApplicationRunning")
+            .and_then(|value| value.downcast_into::<CFBoolean>())
+            .is_some_and(bool::from);
+        items.push(DockItem {
+            bundle_id,
+            x: position.x,
+            y: position.y,
+            w: size.width,
+            h: size.height,
+            element: item.clone(),
+            running,
+            account: None,
+        });
     }
     Some(items)
 }
@@ -241,22 +260,57 @@ fn to_cocoa_y(ax_y: f64, height: f64, primary_screen_height: f64) -> f64 {
     primary_screen_height - ax_y - height
 }
 
-/// For each overlay, the first Dock item whose bundle id it lists (an item serves one overlay at most):
-/// `((x, y, size), overlay index)` in AX coordinates.
-fn match_overlays(items: &[DockItem], overlays: &[DockOverlay]) -> Vec<((f64, f64, f64), usize)> {
+/// Which Dock tile an overlay goes on.
+#[derive(Debug, Clone, PartialEq)]
+enum Want {
+    /// The first free tile of the app.
+    AnyTile,
+    /// Only the tile whose process is signed in to this Claude account uuid.
+    Account(String),
+    /// Nowhere (its account could not be resolved).
+    Skip,
+}
+
+/// The first unused Dock item with a bundle id the overlay lists (and, for `account`, signed in to it).
+fn first_free(items: &[DockItem], used: &[bool], overlay: &DockOverlay, account: Option<&str>) -> Option<usize> {
+    items.iter().enumerate().find_map(|(i, item)| {
+        let fits = !used[i]
+            && overlay.bundle_ids.contains(&item.bundle_id)
+            && account.is_none_or(|uuid| item.account.as_deref() == Some(uuid));
+        fits.then_some(i)
+    })
+}
+
+/// For each overlay, the Dock item it goes on (an item serves one overlay at most): `((x, y, size), overlay index)`
+/// in AX coordinates. Overlays for an account go first, each on the tile signed in to it; then the others take
+/// the first free tile of their app.
+fn match_overlays(items: &[DockItem], overlays: &[DockOverlay], wants: &[Want]) -> Vec<((f64, f64, f64), usize)> {
     let mut used = vec![false; items.len()];
     let mut matched = Vec::new();
-    for (index, overlay) in overlays.iter().enumerate() {
-        let found = items
-            .iter()
-            .enumerate()
-            .find(|(i, item)| !used[*i] && overlay.bundle_ids.contains(&item.bundle_id));
-        if let Some((i, item)) = found {
-            used[i] = true;
-            matched.push((overlay_frame(icon_tile(item.x, item.y, item.w, item.h)), index));
+    // Pass 1: account overlays; pass 2: the others.
+    for account_pass in [true, false] {
+        for (index, (overlay, want)) in overlays.iter().zip(wants).enumerate() {
+            let account = match want {
+                Want::Account(uuid) if account_pass => Some(uuid.as_str()),
+                Want::AnyTile if !account_pass => None,
+                _ => continue,
+            };
+            if let Some(i) = first_free(items, &used, overlay, account) {
+                used[i] = true;
+                let item = &items[i];
+                matched.push((overlay_frame(icon_tile(item.x, item.y, item.w, item.h)), index));
+            }
         }
     }
     matched
+}
+
+/// Decodes a base64 PNG; empty (and a warning) when it is not valid base64.
+fn decode_png(base64: &str) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD.decode(base64.trim()).unwrap_or_else(|_| {
+        log::warn!("dock overlay image is not valid base64");
+        Vec::new()
+    })
 }
 
 // ---- Background loop ----
@@ -370,6 +424,12 @@ struct Worker {
     /// Overlays seen last and their decoded PNGs (same order); decoding only repeats when they change.
     overlays: Vec<DockOverlay>,
     pngs: Vec<Vec<u8>>,
+    /// Which tile each overlay goes on (same order as `overlays`).
+    wants: Vec<Want>,
+    /// OpenUsage account id -> Claude account uuid; looked up once per id (the keychain read is slow).
+    account_uuids: HashMap<String, String>,
+    /// Tile <-> process pairs of each app copy-per-account, by bundle id.
+    owners: HashMap<String, super::dock_owners::Owners<CFType>>,
     /// What the main thread was last told to show (empty = nothing).
     last: Vec<Target>,
     /// Frames (x, y, size) of the targets of the previous successful read, to tell when the Dock moved.
@@ -413,16 +473,51 @@ impl Worker {
         if overlays == self.overlays {
             return;
         }
-        self.pngs = overlays
+        self.pngs = overlays.iter().map(|overlay| decode_png(&overlay.png)).collect();
+        for id in overlays.iter().filter_map(|overlay| overlay.account_id.as_ref()) {
+            if self.account_uuids.contains_key(id) {
+                continue;
+            }
+            // Failures are not cached: retried when the overlays change (e.g. after signing in again).
+            match crate::accounts::claude_account_uuid(id) {
+                Ok(uuid) => {
+                    self.account_uuids.insert(id.clone(), uuid);
+                }
+                Err(error) => log::warn!("dock overlay: no Claude account for {id}: {error}"),
+            }
+        }
+        self.wants = overlays
             .iter()
-            .map(|overlay| {
-                base64::engine::general_purpose::STANDARD.decode(overlay.png.trim()).unwrap_or_else(|_| {
-                    log::warn!("dock overlay image is not valid base64");
-                    Vec::new()
-                })
+            .map(|overlay| match &overlay.account_id {
+                None => Want::AnyTile,
+                Some(id) => self.account_uuids.get(id).map_or(Want::Skip, |uuid| Want::Account(uuid.clone())),
             })
             .collect();
         self.overlays = overlays;
+    }
+
+    /// Fills `account` of the tiles of apps that have overlays for an account: pairs the running tiles with the
+    /// app's processes and reads each process's signed-in Claude account.
+    fn resolve_accounts(&mut self, items: &mut [DockItem]) {
+        let mut bundles: Vec<&str> = Vec::new();
+        for (overlay, want) in self.overlays.iter().zip(&self.wants) {
+            if matches!(want, Want::Account(_)) {
+                bundles.extend(overlay.bundle_ids.iter().map(String::as_str));
+            }
+        }
+        bundles.sort_unstable();
+        bundles.dedup();
+        for bundle in bundles {
+            let indices: Vec<usize> = (0..items.len())
+                .filter(|&i| items[i].bundle_id == bundle && items[i].running)
+                .collect();
+            let tiles: Vec<CFType> = indices.iter().map(|&i| items[i].element.clone()).collect();
+            let pids = super::dock_owners::app_pids(bundle);
+            let owners = self.owners.entry(bundle.to_string()).or_default().update(&tiles, &pids);
+            for (&i, pid) in indices.iter().zip(owners) {
+                items[i].account = pid.and_then(super::dock_owners::process_account);
+            }
+        }
     }
 
     /// Windows to show now; `None` to leave the current ones untouched (no permission, Dock unreadable).
@@ -443,7 +538,7 @@ impl Worker {
             self.pid = Some(pid);
             read_items(pid)
         });
-        let Some(items) = items else {
+        let Some(mut items) = items else {
             self.pid = None; // the Dock restarted or is gone: look it up again next time
             if !self.warned_unreadable {
                 log::warn!("could not read the Dock items");
@@ -454,7 +549,8 @@ impl Worker {
         self.warned_unreadable = false;
 
         let screen_height = primary_screen_height();
-        let targets = match_overlays(&items, &self.overlays)
+        self.resolve_accounts(&mut items);
+        let targets = match_overlays(&items, &self.overlays, &self.wants)
             .into_iter()
             .filter(|(_, index)| !self.pngs[*index].is_empty())
             .map(|((x, y, size), index)| Target {
@@ -563,11 +659,39 @@ mod tests {
     use super::*;
 
     fn item(bundle_id: &str, x: f64) -> DockItem {
-        DockItem { bundle_id: bundle_id.into(), x, y: 800.0, w: 62.0, h: 78.0 }
+        DockItem {
+            bundle_id: bundle_id.into(),
+            x,
+            y: 800.0,
+            w: 62.0,
+            h: 78.0,
+            element: CFString::new(&format!("{bundle_id}@{x}")).as_CFType(),
+            running: true,
+            account: None,
+        }
+    }
+
+    fn account_item(bundle_id: &str, x: f64, account: &str) -> DockItem {
+        DockItem { account: Some(account.into()), ..item(bundle_id, x) }
     }
 
     fn overlay(ids: &[&str]) -> DockOverlay {
-        DockOverlay { bundle_ids: ids.iter().map(|id| id.to_string()).collect(), png: String::new() }
+        DockOverlay { bundle_ids: ids.iter().map(|id| id.to_string()).collect(), png: String::new(), account_id: None }
+    }
+
+    fn any(count: usize) -> Vec<Want> {
+        vec![Want::AnyTile; count]
+    }
+
+    fn account(uuid: &str) -> Want {
+        Want::Account(uuid.into())
+    }
+
+    /// `(overlay index, frame x)` of the placed overlays, sorted by overlay index.
+    fn placed(matched: &[((f64, f64, f64), usize)]) -> Vec<(usize, f64)> {
+        let mut out: Vec<_> = matched.iter().map(|((x, _, _), index)| (*index, *x)).collect();
+        out.sort_by_key(|(index, _)| *index);
+        out
     }
 
     fn close(a: f64, b: f64) -> bool {
@@ -595,7 +719,7 @@ mod tests {
     fn overlays_match_the_first_listed_item() {
         let items = [item("a", 0.0), item("b", 100.0), item("b2", 200.0)];
         let overlays = [overlay(&["b2", "b"]), overlay(&["a"])];
-        let matched = match_overlays(&items, &overlays);
+        let matched = match_overlays(&items, &overlays, &any(2));
         assert_eq!(matched.len(), 2);
         assert_eq!(matched[0].1, 0);
         assert!(close(matched[0].0.0, overlay_frame(icon_tile(100.0, 800.0, 62.0, 78.0)).0));
@@ -607,14 +731,52 @@ mod tests {
     fn an_item_serves_one_overlay_only() {
         let items = [item("a", 0.0), item("a", 100.0)];
         let overlays = [overlay(&["a"]), overlay(&["a"]), overlay(&["a"])];
-        let matched = match_overlays(&items, &overlays);
+        let matched = match_overlays(&items, &overlays, &any(3));
         assert_eq!(matched.iter().map(|m| m.1).collect::<Vec<_>>(), vec![0, 1]);
     }
 
     #[test]
     fn unmatched_overlays_are_skipped() {
-        assert!(match_overlays(&[item("a", 0.0)], &[overlay(&["zzz"])]).is_empty());
-        assert!(match_overlays(&[], &[overlay(&["a"])]).is_empty());
+        assert!(match_overlays(&[item("a", 0.0)], &[overlay(&["zzz"])], &any(1)).is_empty());
+        assert!(match_overlays(&[], &[overlay(&["a"])], &any(1)).is_empty());
+    }
+
+    /// x of the overlay frame for a tile placed at item x `x`.
+    fn frame_x(x: f64) -> f64 {
+        overlay_frame(icon_tile(x, 800.0, 62.0, 78.0)).0
+    }
+
+    #[test]
+    fn account_overlays_go_on_the_tile_signed_in_to_the_account() {
+        let items = [account_item("c", 0.0, "u2"), account_item("c", 100.0, "u1")];
+        let overlays = [overlay(&["c"]), overlay(&["c"])];
+        let matched = match_overlays(&items, &overlays, &[account("u1"), account("u2")]);
+        let by_index = placed(&matched);
+        assert_eq!(by_index.len(), 2);
+        assert!(close(by_index[0].1, frame_x(100.0)));
+        assert!(close(by_index[1].1, frame_x(0.0)));
+    }
+
+    #[test]
+    fn an_account_overlay_without_a_tile_of_that_account_is_not_placed() {
+        let items = [account_item("c", 0.0, "u2"), item("c", 100.0)];
+        assert!(match_overlays(&items, &[overlay(&["c"])], &[account("u1")]).is_empty());
+    }
+
+    #[test]
+    fn skipped_overlays_are_not_placed() {
+        assert!(match_overlays(&[item("a", 0.0)], &[overlay(&["a"])], &[Want::Skip]).is_empty());
+    }
+
+    #[test]
+    fn an_account_overlay_listed_after_an_any_overlay_still_gets_its_tile() {
+        let items = [account_item("c", 0.0, "u1"), account_item("c", 100.0, "u2")];
+        let overlays = [overlay(&["c"]), overlay(&["c"])];
+        let matched = match_overlays(&items, &overlays, &[Want::AnyTile, account("u1")]);
+        let by_index = placed(&matched);
+        assert_eq!(by_index.len(), 2);
+        assert!(close(by_index[0].1, frame_x(100.0)));
+        assert!(close(by_index[1].1, frame_x(0.0)));
     }
 
     fn burst_at(started: Instant) -> Burst {

@@ -16,6 +16,8 @@ export type TaskbarProvider = {
   brandColor?: string
   iconMask?: string | null
   items: TaskbarItem[]
+  /** Claude accounts (2+ registered): the account name drawn with the usage. */
+  accountName?: string
 }
 
 /** Blur under the widget's background card (macOS: native blur view; Windows: blurred wallpaper drawn natively). */
@@ -32,8 +34,13 @@ export type TaskbarBackdrop = {
 /** Windows: raw widget pixels (straight, non-premultiplied RGBA, base64) drawn natively on the taskbar. */
 export type WidgetRgbaImage = { width: number; height: number; rgba: string }
 
-/** macOS: pre-rendered Dock overlay (140x140 unit canvas, see dock-overlay-image.ts) for the apps with these bundle ids. */
-export type DockOverlay = { bundleIds: string[]; png: string }
+/** macOS: pre-rendered Dock overlay (140x140 unit canvas, see dock-overlay-image.ts) for the apps with these bundle ids.
+ * `accountId` (Claude accounts): only the Dock tile of the app copy signed in to that OpenUsage account gets it. */
+export type DockOverlay = {
+  bundleIds: string[]
+  png: string
+  accountId?: string
+}
 
 export type TaskbarPayload = {
   providers: TaskbarProvider[]

@@ -1,9 +1,12 @@
+import { useMemo } from "react"
 import { BatteryFullIcon, SearchIcon, WifiIcon } from "lucide-react"
 import { MenuBarImage } from "@/components/menu-bar-widget-preview"
 import { useModelDemoPayload } from "@/components/widget-tab/demo-payload"
 import type { WidgetAppearance, WidgetTabModel } from "@/components/widget-tab/types"
 import { useSystemDark } from "@/hooks/use-system-dark"
+import { accountLabel as accountPart, claudeAccountId } from "@/lib/claude-desktop"
 import { isWindowsPlatform } from "@/lib/platform"
+import type { MenuBarAccountLabel } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 
 /** The widget is 22pt tall in the real menu bar. */
@@ -36,6 +39,8 @@ export interface MenuBarPreviewStripProps {
     Partial<Pick<WidgetTabModel, "visible">>
   /** 1 = real size (22px widget). Use ~2.2 for a big preview. */
   zoom?: number
+  /** How Claude accounts are named in the demo widget (when 2+ are registered); omit to leave the demo unnamed. */
+  accountLabel?: MenuBarAccountLabel
   /** Small caption chip in the bottom-left corner of the wallpaper ("Live preview"). */
   label?: string
   className?: string
@@ -46,10 +51,27 @@ export interface MenuBarPreviewStripProps {
  * image the real bar shows, at scale 3, displayed 22px tall x `zoom`). Dark / light follows the system. Pin it with
  * `sticky top-0`.
  */
-export function MenuBarPreviewStrip({ model, zoom = 1, label, className }: MenuBarPreviewStripProps) {
+export function MenuBarPreviewStrip({ model, zoom = 1, accountLabel, label, className }: MenuBarPreviewStripProps) {
   const dark = useSystemDark()
   const theme = dark ? "dark" : "light"
-  const payload = useModelDemoPayload(model)
+  const demoPayload = useModelDemoPayload(model)
+  // Account names (account part of the plugin name) once 2+ Claude accounts are registered; keyed on content.
+  const claudeAccounts = model.pluginsMeta.filter((meta) => claudeAccountId(meta.id) !== null)
+  const namesKey = JSON.stringify(
+    accountLabel !== undefined && accountLabel !== "off" && claudeAccounts.length >= 2
+      ? Object.fromEntries(claudeAccounts.map((meta) => [meta.id, accountPart(meta.name)]))
+      : null
+  )
+  const payload = useMemo(() => {
+    const names = JSON.parse(namesKey) as Record<string, string> | null
+    if (!names) return demoPayload
+    return {
+      ...demoPayload,
+      providers: demoPayload.providers.map((provider) =>
+        names[provider.id] ? { ...provider, accountName: names[provider.id] } : provider
+      ),
+    }
+  }, [demoPayload, namesKey])
   const hidden = model.visible === false
   const windows = isWindowsPlatform()
   const px = (value: number) => value * zoom
@@ -97,6 +119,7 @@ export function MenuBarPreviewStrip({ model, zoom = 1, label, className }: MenuB
             colors={model.colors}
             textColors={model.textColors}
             toneModes={model.toneModes}
+            accountLabel={accountLabel}
             heightPx={px(widgetHeight)}
           />
         </div>

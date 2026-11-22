@@ -4,6 +4,7 @@ import { useSystemDark } from "@/hooks/use-system-dark"
 import { renderMenuBarWidgetPng } from "@/lib/menubar-widget-image"
 import {
   MENU_BAR_WIDGET_STYLES,
+  type MenuBarAccountLabel,
   type MenuBarWidgetBackdrop,
   type MenuBarWidgetColors,
   type MenuBarWidgetStyle,
@@ -69,10 +70,13 @@ export function MenuBarImage({
   colors,
   textColors,
   toneModes,
+  accountLabel,
   heightPx,
 }: AppearanceProps & {
   iconMask?: string | null
   payload?: TaskbarPayload
+  /** How providers with an `accountName` show it. */
+  accountLabel?: MenuBarAccountLabel
   dark: boolean
   style: MenuBarWidgetStyle
   heightPx: number
@@ -94,6 +98,7 @@ export function MenuBarImage({
       colors: JSON.parse(colorsKey) as MenuBarWidgetColors,
       textColors: JSON.parse(textColorsKey) as MenuBarWidgetTextColors,
       toneModes: JSON.parse(toneModesKey) as MenuBarWidgetToneModes,
+      accountLabel,
       scale: SAMPLE_RENDER_SCALE,
     })
       .then((result) => {
@@ -103,7 +108,7 @@ export function MenuBarImage({
     return () => {
       cancelled = true
     }
-  }, [payload, dark, style, backdropKey, colorsKey, textColorsKey, toneModesKey])
+  }, [payload, dark, style, accountLabel, backdropKey, colorsKey, textColorsKey, toneModesKey])
 
   if (!png) return <div style={{ height: heightPx }} aria-hidden />
   return (

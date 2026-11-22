@@ -28,6 +28,16 @@ fn signed_in_uuid(dir: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Claude account uuid signed in to the copy of Claude Desktop started with `user_data_dir`
+/// (`None`: the app's default folder).
+#[cfg(target_os = "macos")]
+pub(crate) fn signed_in_account(user_data_dir: Option<&Path>) -> Option<String> {
+    match user_data_dir {
+        Some(dir) => signed_in_uuid(dir),
+        None => main_dir().and_then(|dir| signed_in_uuid(&dir)),
+    }
+}
+
 /// Windows: outside AppData, which the Store (MSIX) app would redirect into its own package.
 fn profiles_root() -> Result<PathBuf, String> {
     let base = if IS_MAC { dirs::data_dir() } else { dirs::home_dir() };

@@ -1,11 +1,18 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useState } from "react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { LayoutHybrid } from "@/components/widget-tab/layout-hybrid"
 import type { WidgetTabModel } from "@/components/widget-tab/types"
 import { makeWidgetTabModel } from "@/test/widget-tab-model"
 
+const state = vi.hoisted(() => ({ loadLabelMock: vi.fn(), saveLabelMock: vi.fn() }))
+
+vi.mock("@/lib/settings", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/settings")>("@/lib/settings")),
+  loadMenuBarAccountLabel: state.loadLabelMock,
+  saveMenuBarAccountLabel: state.saveLabelMock,
+}))
 vi.mock("@/lib/menubar-widget-image", async () => ({
   ...(await vi.importActual<typeof import("@/lib/menubar-widget-image")>("@/lib/menubar-widget-image")),
   renderMenuBarWidgetPng: vi.fn(async () => "AAAA"),
@@ -15,6 +22,10 @@ vi.mock("@/lib/icon-mask", () => ({
   getIconMask: vi.fn(async () => null),
 }))
 
+beforeEach(() => {
+  state.loadLabelMock.mockReset().mockResolvedValue("initial")
+  state.saveLabelMock.mockReset().mockResolvedValue(undefined)
+})
 afterEach(() => cleanup())
 
 /** Keeps the model's values in state so edits are reflected back, like the Settings page does. */
@@ -87,9 +98,10 @@ describe("LayoutHybrid", () => {
     await openTab("Menu Bar")
     expect(screen.queryByRole("radiogroup", { name: "Widget preset" })).toBeNull()
     expect(screen.queryByTestId("preset-summary")).toBeNull()
-    for (const title of ["Layout", "Background"]) {
+    for (const title of ["Layout", "Background", "Account name"]) {
       expect(header(title)).toHaveAttribute("aria-expanded", "false")
     }
+    expect(summaryOf("Account name")).toHaveTextContent("Initial")
     expect(summaryOf("Layout")).toHaveTextContent("Compact")
     expect(summaryOf("Background")).toHaveTextContent("Auto · blur 50%")
     expect(screen.queryByRole("button", { name: /^Colors/ })).toBeNull()
@@ -116,5 +128,17 @@ describe("LayoutHybrid", () => {
     await openTab("Providers")
     await userEvent.click(screen.getByLabelText("ChatGPT"))
     expect(model.onProviderIdsChange).toHaveBeenLastCalledWith(["claude"])
+  })
+
+  it("account name section shows the stored choice and saves a new one", async () => {
+    state.loadLabelMock.mockResolvedValue("top")
+    render(<LayoutHybrid model={makeWidgetTabModel()} />)
+    await openTab("Menu Bar")
+    await waitFor(() => expect(summaryOf("Account name")).toHaveTextContent("On top"))
+    await userEvent.click(header("Account name"))
+    expect(screen.getByRole("radio", { name: "On top" })).toHaveAttribute("aria-checked", "true")
+    await userEvent.click(screen.getByRole("radio", { name: "Beside" }))
+    expect(state.saveLabelMock).toHaveBeenCalledWith("beside")
+    expect(summaryOf("Account name")).toHaveTextContent("Beside")
   })
 })

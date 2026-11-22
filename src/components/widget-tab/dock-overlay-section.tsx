@@ -3,12 +3,17 @@ import { selectDemoProviders, DEFAULT_DEMO_TONES, type DemoTone } from "@/compon
 import { SurfaceOverrides, withOverrides } from "@/components/widget-tab/surface-overrides"
 import type { WidgetTabModel } from "@/components/widget-tab/types"
 import { useSurfaceOverrides } from "@/components/widget-tab/use-surface-overrides"
+import { accountLabel, claudeAccountId } from "@/lib/claude-desktop"
 import { dockBundleIdsFor } from "@/lib/dock-apps"
 import { renderDockOverlayPng } from "@/lib/dock-overlay-image"
 import {
+  DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL,
   DEFAULT_DOCK_OVERLAY_STYLE,
+  loadDockOverlayAccountLabel,
   loadDockOverlayStyle,
+  saveDockOverlayAccountLabel,
   saveDockOverlayStyle,
+  type DockOverlayAccountLabel,
   type DockOverlayStyle,
 } from "@/lib/settings"
 import type { TaskbarProvider } from "@/lib/taskbar-payload"
@@ -17,6 +22,13 @@ import { cn } from "@/lib/utils"
 const OPTIONS: { id: DockOverlayStyle; name: string }[] = [
   { id: "off", name: "Off" },
   { id: "pill", name: "Values" },
+]
+
+const ACCOUNT_OPTIONS: { id: DockOverlayAccountLabel; name: string }[] = [
+  { id: "off", name: "Off" },
+  { id: "initial", name: "Initial" },
+  { id: "tag", name: "Tag" },
+  { id: "pill", name: "In pill" },
 ]
 
 /** Demo used / expected fractions per tone (same numbers as the widget demo: 13%/91%, 78%/70%, 94%/61%). */
@@ -119,16 +131,37 @@ function StyleGlyph({ id }: { id: DockOverlayStyle }) {
   )
 }
 
+/** Tiny picture of where an account name is drawn, for the option cards. */
+function AccountGlyph({ id }: { id: DockOverlayAccountLabel }) {
+  if (id === "off") return <span className="text-base leading-6 text-muted-foreground">–</span>
+  return (
+    <span className="relative block size-6 rounded-md bg-muted-foreground/60">
+      {id === "initial" && (
+        <span className="absolute -left-1 -top-1 size-2.5 rounded-full border border-white/30 bg-neutral-800" />
+      )}
+      {id === "tag" && (
+        <span className="absolute inset-x-1 -top-1 h-1.5 rounded-full border border-white/30 bg-neutral-800" />
+      )}
+      {id === "pill" && (
+        <span className="absolute inset-x-0.5 -bottom-1 h-3.5 rounded-md border border-white/30 bg-neutral-800" />
+      )}
+    </span>
+  )
+}
+
 /**
  * "Dock" pane of the Widget tab (macOS): a live fake Dock with one tile per provider of the widget, then the style
- * picker for how usage is drawn over each provider's app icon in the real Dock, then the Dock's overrides.
+ * picker for how usage is drawn over each provider's app icon in the real Dock, the account name picker (several
+ * Claude accounts registered), then the Dock's overrides.
  */
 export function DockOverlaySection({ model: globalModel }: { model: WidgetTabModel }) {
   const [overrides, setOverrides] = useSurfaceOverrides("dock")
   // The preview follows the Dock's own providers / colors.
   const model = withOverrides(globalModel, overrides)
   const [style, setStyle] = useState<DockOverlayStyle>(DEFAULT_DOCK_OVERLAY_STYLE)
+  const [accountMode, setAccountMode] = useState<DockOverlayAccountLabel>(DEFAULT_DOCK_OVERLAY_ACCOUNT_LABEL)
   const [pngs, setPngs] = useState<Record<string, string | null>>({})
+  const registeredClaudeAccounts = model.pluginsMeta.filter((meta) => claudeAccountId(meta.id) !== null).length
 
   // Models arrive as fresh objects on every render: key on the content that decides the overlay.
   const previewKey = JSON.stringify({
@@ -157,6 +190,12 @@ export function DockOverlaySection({ model: globalModel }: { model: WidgetTabMod
       } catch (error) {
         console.error("Failed to load dock overlay style:", error)
       }
+      try {
+        const stored = await loadDockOverlayAccountLabel()
+        if (!cancelled) setAccountMode(stored)
+      } catch (error) {
+        console.error("Failed to load dock overlay account label:", error)
+      }
     })()
     return () => {
       cancelled = true
@@ -169,10 +208,18 @@ export function DockOverlaySection({ model: globalModel }: { model: WidgetTabMod
     void (async () => {
       try {
         const opts = { colors, toneModes, textColors }
+        const withDockApp = providers.filter((provider) => provider.hasDockApp)
+        // The name shows once 2+ Claude accounts are registered, so the preview draws it on account tiles then.
+        const showNames = registeredClaudeAccounts >= 2
         const rendered = await Promise.all(
-          providers
-            .filter((provider) => provider.hasDockApp)
-            .map(async (provider) => [provider.id, await renderDockOverlayPng(provider.overlay, opts)] as const)
+          withDockApp.map(async (provider) => {
+            const account =
+              showNames && accountMode !== "off" && claudeAccountId(provider.id)
+                ? { mode: accountMode, name: accountLabel(provider.name) }
+                : undefined
+            const png = await renderDockOverlayPng(provider.overlay, account ? { ...opts, account } : opts)
+            return [provider.id, png] as const
+          })
         )
         if (!cancelled) setPngs(Object.fromEntries(rendered))
       } catch (error) {
@@ -182,11 +229,18 @@ export function DockOverlaySection({ model: globalModel }: { model: WidgetTabMod
     return () => {
       cancelled = true
     }
-  }, [providers, colors, toneModes, textColors, style])
+  }, [providers, colors, toneModes, textColors, style, accountMode, registeredClaudeAccounts])
 
   const save = (next: DockOverlayStyle) => {
     setStyle(next)
     saveDockOverlayStyle(next).catch((error) => console.error("Failed to save dock overlay style:", error))
+  }
+
+  const saveAccountMode = (next: DockOverlayAccountLabel) => {
+    setAccountMode(next)
+    saveDockOverlayAccountLabel(next).catch((error) =>
+      console.error("Failed to save dock overlay account label:", error)
+    )
   }
 
   const note = noDockAppNote(providers.filter((provider) => !provider.hasDockApp).map((provider) => provider.name))
@@ -240,6 +294,40 @@ export function DockOverlaySection({ model: globalModel }: { model: WidgetTabMod
           )
         })}
       </div>
+      {style !== "off" && (
+        <div className="space-y-1.5">
+          <p className="text-[12px] text-muted-foreground">Account name</p>
+          <p className="text-[12px] text-muted-foreground">
+            Shown when more than one Claude account is registered.
+          </p>
+          <div role="radiogroup" aria-label="Dock account name" className="grid grid-cols-4 gap-2">
+            {ACCOUNT_OPTIONS.map((option) => {
+              const selected = option.id === accountMode
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-label={option.name}
+                  data-dock-account-label={option.id}
+                  onClick={() => {
+                    if (option.id !== accountMode) saveAccountMode(option.id)
+                  }}
+                  className={cn(
+                    "flex min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border-[1.5px] bg-card px-1.5 py-2.5 text-center outline-none transition-colors",
+                    "focus-visible:ring-3 focus-visible:ring-ring/50",
+                    selected ? "border-primary ring-2 ring-primary/25" : "border-border hover:bg-muted/60"
+                  )}
+                >
+                  <AccountGlyph id={option.id} />
+                  <span className="text-[13px] font-semibold text-foreground">{option.name}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       <SurfaceOverrides model={globalModel} surface="dock" overrides={overrides} onChange={setOverrides} />
     </div>
   )

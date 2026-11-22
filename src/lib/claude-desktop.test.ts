@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest"
-import { claudeAccountId } from "@/lib/claude-desktop"
+import { accountLabel, claudeAccountId } from "@/lib/claude-desktop"
+
+describe("accountLabel", () => {
+  it("keeps the part after the last separator", () => {
+    expect(accountLabel("Claude · ThizeMl")).toBe("ThizeMl")
+    expect(accountLabel("Claude · Team · Work")).toBe("Work")
+  })
+
+  it("keeps a name without the separator whole", () => {
+    expect(accountLabel("Claude Work")).toBe("Claude Work")
+  })
+})
 
 describe("claudeAccountId", () => {
   it("returns the account id of a Claude account instance", () => {

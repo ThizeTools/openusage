@@ -38,6 +38,47 @@ describe("MenuBarPreviewStrip", () => {
     expect(payload.providers[0].items.map((item) => item.label)).toEqual(["Weekly"])
   })
 
+  it("names the Claude accounts in the demo with accountLabel once 2+ are registered", async () => {
+    const meta = (id: string, name: string) => ({
+      ...makeWidgetTabModel().pluginsMeta[0],
+      id,
+      name,
+    })
+    const two = makeWidgetTabModel({
+      plugins: [
+        { id: "claude@a", name: "Claude · Blu", enabled: true },
+        { id: "claude@b", name: "Claude · Work", enabled: true },
+        { id: "codex", name: "ChatGPT", enabled: true },
+      ],
+      pluginsMeta: [meta("claude@a", "Claude · Blu"), meta("claude@b", "Claude · Work"), meta("codex", "ChatGPT")],
+    })
+    vi.mocked(renderMenuBarWidgetPng).mockClear()
+    render(<MenuBarPreviewStrip model={two} accountLabel="beside" />)
+    await waitFor(() => expect(vi.mocked(renderMenuBarWidgetPng)).toHaveBeenCalled())
+    const [payload, opts] = vi.mocked(renderMenuBarWidgetPng).mock.calls.at(-1)!
+    expect(payload.providers.map((p) => p.accountName)).toEqual(["Blu", "Work", undefined])
+    expect(opts.accountLabel).toBe("beside")
+
+    // Mode "off": the demo is unnamed.
+    cleanup()
+    vi.mocked(renderMenuBarWidgetPng).mockClear()
+    render(<MenuBarPreviewStrip model={two} accountLabel="off" />)
+    await waitFor(() => expect(vi.mocked(renderMenuBarWidgetPng)).toHaveBeenCalled())
+    expect(vi.mocked(renderMenuBarWidgetPng).mock.calls.at(-1)![0].providers.every((p) => !("accountName" in p))).toBe(true)
+
+    // One account, or no accountLabel prop: the demo is unnamed.
+    cleanup()
+    vi.mocked(renderMenuBarWidgetPng).mockClear()
+    render(<MenuBarPreviewStrip model={two} />)
+    await waitFor(() => expect(vi.mocked(renderMenuBarWidgetPng)).toHaveBeenCalled())
+    expect(vi.mocked(renderMenuBarWidgetPng).mock.calls.at(-1)![0].providers.every((p) => !("accountName" in p))).toBe(true)
+    cleanup()
+    vi.mocked(renderMenuBarWidgetPng).mockClear()
+    render(<MenuBarPreviewStrip model={makeWidgetTabModel()} accountLabel="initial" />)
+    await waitFor(() => expect(vi.mocked(renderMenuBarWidgetPng)).toHaveBeenCalled())
+    expect(vi.mocked(renderMenuBarWidgetPng).mock.calls.at(-1)![0].providers.every((p) => !("accountName" in p))).toBe(true)
+  })
+
   it("zoom scales the bar and the widget", async () => {
     render(<MenuBarPreviewStrip model={makeWidgetTabModel()} zoom={2} />)
     const widget = screen.getByTestId("menu-bar-preview-widget")

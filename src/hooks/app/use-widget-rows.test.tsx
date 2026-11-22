@@ -99,12 +99,14 @@ describe("useWidgetRows", () => {
       const { result } = renderHook(() => useWidgetRows())
       await waitFor(() => expect(result.current.rows.some((row) => row.id === "claude")).toBe(true))
       expect(result.current.rows.some((row) => row.id === "claude@acc2")).toBe(false)
+      expect(result.current.claudeAccountCount).toBe(0)
 
       plugins = [pluginMeta, accountMeta]
       await waitFor(() => expect(onAccountsChanged).toBeDefined())
       act(() => onAccountsChanged?.())
 
       await waitFor(() => expect(result.current.rows.some((row) => row.id === "claude@acc2")).toBe(true))
+      expect(result.current.claudeAccountCount).toBe(1)
       const listCalls = state.invokeMock.mock.calls.filter(([command]) => command === "list_plugins")
       expect(listCalls).toHaveLength(2)
       expect(state.invokeMock).not.toHaveBeenCalledWith("start_probe_batch", expect.anything())

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -6,6 +6,8 @@ const state = vi.hoisted(() => ({
   stored: "off",
   loadMock: vi.fn(),
   saveMock: vi.fn(),
+  loadLabelMock: vi.fn(),
+  saveLabelMock: vi.fn(),
   pngMock: vi.fn(),
 }))
 
@@ -13,6 +15,8 @@ vi.mock("@/lib/settings", async () => ({
   ...(await vi.importActual<typeof import("@/lib/settings")>("@/lib/settings")),
   loadDockOverlayStyle: state.loadMock,
   saveDockOverlayStyle: state.saveMock,
+  loadDockOverlayAccountLabel: state.loadLabelMock,
+  saveDockOverlayAccountLabel: state.saveLabelMock,
 }))
 vi.mock("@/lib/dock-overlay-image", () => ({ renderDockOverlayPng: state.pngMock }))
 
@@ -24,6 +28,10 @@ beforeEach(() => {
   state.loadMock.mockImplementation(async () => state.stored)
   state.saveMock.mockReset()
   state.saveMock.mockResolvedValue(undefined)
+  state.loadLabelMock.mockReset()
+  state.loadLabelMock.mockResolvedValue("initial")
+  state.saveLabelMock.mockReset()
+  state.saveLabelMock.mockResolvedValue(undefined)
   state.pngMock.mockReset()
   state.pngMock.mockResolvedValue("AAAA")
   state.stored = "off"
@@ -59,20 +67,20 @@ describe("DockOverlaySection", () => {
     expect(screen.getByRole("radio", { name: "Values" })).toHaveAttribute("aria-checked", "true")
     await waitFor(() => expect(state.loadMock).toHaveBeenCalled())
     expect(screen.getByRole("radio", { name: "Values" })).toHaveAttribute("aria-checked", "true")
-    expect(screen.getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "false")
+    expect(within(group()).getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "false")
   })
 
   it("has only the Off and Values cards, no ring switch, and saves the choice", async () => {
     state.stored = "off"
     render(<DockOverlaySection model={model()} />)
-    await waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "true"))
+    await waitFor(() => expect(within(group()).getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "true"))
     expect(group().querySelectorAll('[role="radio"]')).toHaveLength(2)
     expect(screen.queryByRole("switch", { name: "Progress ring around the icon" })).toBeNull()
     await userEvent.click(screen.getByRole("radio", { name: "Values" }))
     expect(state.saveMock).toHaveBeenCalledWith("pill")
     expect(screen.getByRole("radio", { name: "Values" })).toHaveAttribute("aria-checked", "true")
-    expect(screen.getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "false")
-    await userEvent.click(screen.getByRole("radio", { name: "Off" }))
+    expect(within(group()).getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "false")
+    await userEvent.click(within(group()).getByRole("radio", { name: "Off" }))
     expect(state.saveMock).toHaveBeenLastCalledWith("off")
   })
 
@@ -147,6 +155,103 @@ describe("DockOverlaySection", () => {
     rerender(<DockOverlaySection model={model({ colors: { behind: "#112233" } })} />)
     await waitFor(() => expect(state.pngMock).toHaveBeenCalledTimes(4))
     expect(state.pngMock.mock.calls[3][1].colors).toEqual({ behind: "#112233" })
+  })
+
+  it("offers the account name styles with Initial selected by default and saves the choice", async () => {
+    state.stored = "pill"
+    render(<DockOverlaySection model={model()} />)
+    const names = screen.getByRole("radiogroup", { name: "Dock account name" })
+    expect(names.querySelectorAll('[role="radio"]')).toHaveLength(4)
+    await waitFor(() => expect(state.loadLabelMock).toHaveBeenCalled())
+    expect(screen.getByRole("radio", { name: "Initial" })).toHaveAttribute("aria-checked", "true")
+    await userEvent.click(screen.getByRole("radio", { name: "Tag" }))
+    expect(state.saveLabelMock).toHaveBeenCalledWith("tag")
+    expect(screen.getByRole("radio", { name: "Tag" })).toHaveAttribute("aria-checked", "true")
+    expect(screen.getByRole("radio", { name: "In pill" })).toHaveAttribute("aria-checked", "false")
+    // "Off" is the first card; it exists in the style group too, so scope it to the account group.
+    expect(names.querySelector('[role="radio"]')).toHaveAttribute("data-dock-account-label", "off")
+    await userEvent.click(within(names).getByRole("radio", { name: "Off" }))
+    expect(state.saveLabelMock).toHaveBeenLastCalledWith("off")
+  })
+
+  it("hides the account name styles while the style is off", async () => {
+    state.stored = "off"
+    render(<DockOverlaySection model={model()} />)
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "true"))
+    expect(screen.queryByRole("radiogroup", { name: "Dock account name" })).toBeNull()
+  })
+
+  it("previews the account name on Claude account tiles when 2+ are registered", async () => {
+    state.stored = "pill"
+    state.loadLabelMock.mockResolvedValue("tag")
+    const accounts = [
+      { id: "claude@a", name: "Claude · Work", enabled: true },
+      { id: "claude@b", name: "Claude · Home", enabled: true },
+    ]
+    const base = makeWidgetTabModel()
+    render(
+      <DockOverlaySection
+        model={model({
+          plugins: accounts,
+          pluginsMeta: [...base.pluginsMeta, ...accounts.map((a) => extraMeta(a.id, a.name))],
+        })}
+      />
+    )
+    await waitFor(() =>
+      expect(state.pngMock.mock.calls.some(([, opts]) => opts.account?.mode === "tag")).toBe(true)
+    )
+    const names = state.pngMock.mock.calls.map(([, opts]) => opts.account?.name).filter(Boolean)
+    expect(names).toEqual(expect.arrayContaining(["Work", "Home"]))
+  })
+
+  it('previews no account name when the account mode is "off"', async () => {
+    state.stored = "pill"
+    state.loadLabelMock.mockResolvedValue("off")
+    const accounts = [
+      { id: "claude@a", name: "Claude · Work", enabled: true },
+      { id: "claude@b", name: "Claude · Home", enabled: true },
+    ]
+    const base = makeWidgetTabModel()
+    render(
+      <DockOverlaySection
+        model={model({
+          plugins: accounts,
+          pluginsMeta: [...base.pluginsMeta, ...accounts.map((a) => extraMeta(a.id, a.name))],
+        })}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("radiogroup", { name: "Dock account name" })).getByRole("radio", { name: "Off" })
+      ).toHaveAttribute("aria-checked", "true")
+    )
+    // After the stored "off" arrives, the latest renders (one per Dock tile) carry no account.
+    await waitFor(() => expect(state.pngMock.mock.calls.length).toBeGreaterThan(0))
+    state.pngMock.mockClear()
+    const accountGroup = within(screen.getByRole("radiogroup", { name: "Dock account name" }))
+    await userEvent.click(accountGroup.getByRole("radio", { name: "Initial" }))
+    await waitFor(() => expect(state.pngMock.mock.calls.at(-1)![1].account?.mode).toBe("initial"))
+    state.pngMock.mockClear()
+    await userEvent.click(accountGroup.getByRole("radio", { name: "Off" }))
+    await waitFor(() => expect(state.pngMock).toHaveBeenCalled())
+    expect(state.pngMock.mock.calls.every(([, opts]) => opts.account === undefined)).toBe(true)
+  })
+
+  it("previews no account name with one Claude account registered", async () => {
+    state.stored = "pill"
+    state.loadLabelMock.mockResolvedValue("tag")
+    const accounts = [{ id: "claude@a", name: "Claude · Work", enabled: true }]
+    const base = makeWidgetTabModel()
+    render(
+      <DockOverlaySection
+        model={model({
+          plugins: accounts,
+          pluginsMeta: [...base.pluginsMeta, ...accounts.map((a) => extraMeta(a.id, a.name))],
+        })}
+      />
+    )
+    await waitFor(() => expect(state.pngMock).toHaveBeenCalled())
+    expect(state.pngMock.mock.calls.every(([, opts]) => opts.account === undefined)).toBe(true)
   })
 
   it("copes with a renderer that returns null", async () => {
